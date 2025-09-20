@@ -1,1 +1,49 @@
-__pycache__/\n.venv/\n.env\n.DS_Store\ndata/\n
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.env
+.venv/
+.conda/
+.mypy_cache/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+htmlcov/
+coverage.xml
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data and models
+data/raw/
+data/interim/
+data/processed/
+data/external/
+models/
+checkpoints/
+logs/
+*.onnx
+*.pt
+*.ckpt
+*.parquet
+
+# Misc
+.DS_Store
+Thumbs.db
+
+# Preserve placeholders
+!data/raw/.gitkeep
+!data/interim/.gitkeep
+!data/processed/.gitkeep
+!data/external/.gitkeep

@@ -1,0 +1,21 @@
+dataset: bci_iv_2a
+root: data/raw/bci_iv_2a
+subject: A01
+sessions:
+  train:
+    - session01
+    - session02
+  eval:
+    - session03
+  adapt:
+    - session04
+sample_rate: 250
+channels:
+  include: ["C3", "Cz", "C4"]
+  montage: standard_1020
+epochs:
+  window_seconds: 4.0
+  hop_seconds: 0.5
+labels:
+  left: 1
+  right: 2

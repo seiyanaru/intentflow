@@ -1,0 +1,22 @@
+model:
+  name: eegnet
+  encoder: eegencoder
+  hidden_size: 128
+training:
+  batch_size: 64
+  max_epochs: 150
+  optimizer: adamw
+  learning_rate: 0.001
+  weight_decay: 0.01
+  scheduler: cosine
+  gradient_clip: 1.0
+validation:
+  metric: balanced_accuracy
+  early_stopping_patience: 15
+export:
+  onnx: models/intentflow_head.onnx
+  int8: false
+  opset: 18
+logging:
+  run_name: mi-eegnet-baseline
+  output_dir: outputs

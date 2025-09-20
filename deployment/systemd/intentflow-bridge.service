@@ -1,0 +1,13 @@
+[Unit]
+Description=Intentflow Game Bridge
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/intentflow
+ExecStart=/usr/bin/python scripts/export_unity_input.py
+Restart=on-failure
+User=intentflow
+
+[Install]
+WantedBy=multi-user.target

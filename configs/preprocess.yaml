@@ -1,0 +1,17 @@
+bandpass:
+  enabled: true
+  low: 4.0
+  high: 40.0
+  order: 4
+notch:
+  enabled: true
+  freqs: [50.0, 60.0]
+  q: 30
+car:
+  enabled: true
+artifact_rejection:
+  variance_threshold: 5.0
+  emg_band: [60.0, 120.0]
+feature_extraction:
+  method: logvar
+  window_overlap: 0.5

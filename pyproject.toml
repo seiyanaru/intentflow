@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "intentflow"
+version = "0.1.0"
+description = "Motor Imagery EEG → Online inference → Game control framework"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Seiya Narukawa" }]
+dependencies = [
+  "torch",
+  "numpy", "scipy", "mne", "einops",
+  "fastapi", "uvicorn", "websockets", "pydantic>=2",
+  "onnxruntime-gpu; platform_system!='Darwin'",
+  "onnxruntime; platform_system=='Darwin'",
+  "pylsl",
+  "gradio; extra == 'dash'",
+  "streamlit; extra == 'dash'",
+]
+
+[tool.setuptools.packages.find]
+include = ["intentflow*"]
+
+[project.scripts]
+intentflow = "intentflow.online.cli:main"
+
+[project.optional-dependencies]
+dev = ["pytest", "black", "ruff", "mypy", "pre-commit"]
+dash = []

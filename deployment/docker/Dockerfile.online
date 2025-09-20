@@ -1,0 +1,11 @@
+FROM python:3.10-slim
+
+WORKDIR /opt/intentflow
+COPY . /opt/intentflow
+
+RUN pip install --no-cache-dir uvicorn[standard] onnxruntime websockets fastapi && \
+    pip install --no-cache-dir -e .
+
+EXPOSE 8000
+
+CMD ["intentflow", "--config", "configs/online.yaml", "--host", "0.0.0.0", "--port", "8000"]

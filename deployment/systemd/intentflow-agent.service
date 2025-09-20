@@ -1,0 +1,13 @@
+[Unit]
+Description=Intentflow Online Agent
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/intentflow
+ExecStart=/usr/local/bin/intentflow --config configs/online.yaml --host 0.0.0.0 --port 8000
+Restart=always
+User=intentflow
+
+[Install]
+WantedBy=multi-user.target

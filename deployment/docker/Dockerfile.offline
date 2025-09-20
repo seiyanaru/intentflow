@@ -1,0 +1,8 @@
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+
+WORKDIR /opt/intentflow
+COPY . /opt/intentflow
+
+RUN pip install --no-cache-dir -e .[dev]
+
+CMD ["python", "intentflow/offline/train.py", "--config", "configs/offline.yaml"]

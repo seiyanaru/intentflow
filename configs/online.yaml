@@ -1,0 +1,27 @@
+acquisition:
+  backend: lsl
+  inlet_name: IntentflowStream
+  buffer_seconds: 2.0
+preprocess:
+  config: configs/preprocess.yaml
+inference:
+  onnx_path: models/intentflow_head.onnx
+  providers:
+    - CUDAExecutionProvider
+    - CPUExecutionProvider
+  input_window_seconds: 4.0
+  hop_seconds: 0.25
+stabilizer:
+  n_consecutive: 3
+  ema_ms: 150
+  min_interval_ms: 200
+  confidence_threshold: 0.7
+adaptation:
+  config: configs/adapt.yaml
+transport:
+  ws_host: 0.0.0.0
+  ws_port: 8000
+  protocol_version: 1
+metrics:
+  emit_interval_ms: 500
+  include_latency: true

@@ -1,0 +1,26 @@
+name: intentflow
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.10
+  - pytorch
+  - numpy
+  - scipy
+  - mne
+  - pip
+  - pip:
+      - einops
+      - fastapi
+      - uvicorn
+      - websockets
+      - pydantic>=2
+      - onnxruntime
+      - onnxruntime-gpu
+      - pylsl
+      - gradio
+      - streamlit
+      - pytest
+      - black
+      - ruff
+      - mypy
