@@ -1,14 +1,17 @@
 """FastAPI application exposing health, control, and ingest interfaces."""
-# TODO(P1): /ingest should buffer raw samples, window them, and feed the ONNX pipeline.
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import os
+from collections import deque
 from typing import Any, Dict, Set, Union
 
+import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 
 class IntentMessage(BaseModel):
@@ -34,17 +37,19 @@ app = FastAPI(title="intentflow-bridge")
 INTENT_BUS: asyncio.Queue[str] = asyncio.Queue()
 INGEST_COUNTER = {"messages": 0, "samples": 0}
 ACTIVE_SOCKETS: Set[WebSocket] = set()
+RAW_BUF = deque(maxlen=250 * 60 * 10)
+META: Dict[str, int] = {"fs": 0, "ch": 0}
 
 
 async def broadcast_message(message: str) -> None:
   """Broadcast a message to all active sockets, pruning failed connections."""
-  dead_sockets: list[WebSocket] = []
+  dead_sockets: Set[WebSocket] = set()
   for socket in list(ACTIVE_SOCKETS):
     try:
       await socket.send_text(message)
     except Exception as exc:  # noqa: BLE001
       print(f"broadcast_message error: {exc}")
-      dead_sockets.append(socket)
+      dead_sockets.add(socket)
   for socket in dead_sockets:
     ACTIVE_SOCKETS.discard(socket)
 
@@ -105,18 +110,12 @@ async def control(websocket: WebSocket) -> None:
     stop_event.set()
     for task in pending:
       task.cancel()
-      try:
+      with contextlib.suppress(asyncio.CancelledError, Exception):
         await task
-      except asyncio.CancelledError:
-        continue
-      except Exception as exc:  # noqa: BLE001
-        print(f"pending task error: {exc}")
   finally:
     ACTIVE_SOCKETS.discard(websocket)
-    try:
+    with contextlib.suppress(Exception):
       await websocket.close()
-    except Exception as exc:  # noqa: BLE001
-      print(f"websocket close error: {exc}")
 
 
 @app.websocket("/ingest")
@@ -137,19 +136,27 @@ async def ingest(websocket: WebSocket) -> None:
       except json.JSONDecodeError as exc:
         print(f"ingest parse error: {exc}")
         continue
-      try:
-        _validate_intent_message(payload)
-      except (ValidationError, ValueError):
-        pass
-      INGEST_COUNTER["messages"] += 1
+
+      fs = int(payload.get("fs", 0) or 0)
+      ch = int(payload.get("ch", 0) or 0)
       samples = payload.get("samples", [])
-      if isinstance(samples, list):
-        INGEST_COUNTER["samples"] += len(samples)
+      if fs <= 0 or ch <= 0 or not isinstance(samples, list):
+        continue
+
+      META["fs"] = fs
+      META["ch"] = ch
+
+      valid = 0
+      for row in samples:
+        arr = np.asarray(row, dtype=np.float32)
+        if arr.shape == (ch,):
+          RAW_BUF.append(arr)
+          valid += 1
+      INGEST_COUNTER["messages"] += 1
+      INGEST_COUNTER["samples"] += valid
   finally:
-    try:
+    with contextlib.suppress(Exception):
       await websocket.close()
-    except Exception as exc:  # noqa: BLE001
-      print(f"ingest close error: {exc}")
 
 
 async def enqueue_intent(message: IntentMessage) -> None:
@@ -157,4 +164,30 @@ async def enqueue_intent(message: IntentMessage) -> None:
   await INTENT_BUS.put(message.model_dump_json())
 
 
-# TODO(P1): Accept JSON from the Windows .NET bridge through /ingest.
+@app.on_event("startup")
+async def _start_worker() -> None:
+  """Start the inference worker on application startup."""
+  loop = asyncio.get_running_loop()
+  INTENT_BUS._loop = loop  # type: ignore[attr-defined]
+  while not INTENT_BUS.empty():
+    with contextlib.suppress(asyncio.QueueEmpty):
+      INTENT_BUS.get_nowait()
+  from intentflow.online.inference import worker as worker_module
+
+  worker_module.INTENT_BUS = INTENT_BUS
+  onnx = os.environ.get("IF_ONNX", "models/eegnet_dummy.onnx")
+  stats = os.environ.get("IF_STATS", "models/eegnet_dummy.stats.json")
+  try:
+    app.state._inference_task = asyncio.create_task(worker_module.inference_worker(onnx, stats))
+  except Exception as exc:  # noqa: BLE001
+    print(f"failed to start inference_worker: {exc}")
+
+
+@app.on_event("shutdown")
+async def _stop_worker() -> None:
+  """Cancel the inference worker when the application shuts down."""
+  task = getattr(app.state, "_inference_task", None)
+  if task:
+    task.cancel()
+    with contextlib.suppress(Exception):
+      await task
