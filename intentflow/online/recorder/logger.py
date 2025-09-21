@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 import time
-from typing import IO, Sequence
+from typing import IO, Optional, Sequence
 
 
 class Logger:
@@ -14,7 +14,7 @@ class Logger:
   def __init__(self, path: str) -> None:
     """Open the target file for logging."""
     self.path = path
-    self._fh: IO[str] | None = open(path, "w", encoding="utf-8")
+    self._fh: Optional[IO[str]] = open(path, "w", encoding="utf-8")
 
   def write_sample(self, row: Sequence[float]) -> None:
     """Append a single sample row to the log file."""

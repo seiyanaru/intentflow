@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import time
-from typing import Dict
+from typing import Dict, Optional, Union
 
 
 class Stabilizer:
@@ -16,13 +16,13 @@ class Stabilizer:
     self.ema_ms = ema_ms
     self.require_consec = max(1, require_consec)
     self.min_interval_ms = max(0, min_interval_ms)
-    self._ema: float | None = None
-    self._last_update: float | None = None
-    self._last_emit: float | None = None
+    self._ema: Optional[float] = None
+    self._last_update: Optional[float] = None
+    self._last_emit: Optional[float] = None
     self._current_candidate: str = "none"
     self._consecutive: int = 0
 
-  def apply(self, intent: str, conf: float) -> Dict[str, float | str]:
+  def apply(self, intent: str, conf: float) -> Dict[str, Union[float, str]]:
     """Update stabilizer state and return the stabilized intent and EMA."""
     now = time.monotonic()
     if self._ema is None or self.ema_ms <= 0:

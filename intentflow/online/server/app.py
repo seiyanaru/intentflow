@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Set
+from typing import Any, Dict, Set, Union
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ValidationError
@@ -21,10 +21,10 @@ class IntentMessage(BaseModel):
   protocol_version: int = 1
 
 
-def _validate_intent_message(payload: str | dict[str, Any]) -> None:
+def _validate_intent_message(payload: Union[str, Dict[str, Any]]) -> None:
   """Validate an intent payload raising if the schema does not match."""
   if isinstance(payload, str):
-    data: dict[str, Any] = json.loads(payload)
+    data: Dict[str, Any] = json.loads(payload)
   else:
     data = payload
   IntentMessage(**data)
@@ -82,7 +82,7 @@ async def _control_bus_loop(stop_event: asyncio.Event) -> None:
 
 
 @app.get("/health")
-async def health() -> dict[str, Any]:
+async def health() -> Dict[str, Any]:
   """Return service status information."""
   return {"ok": True, "clients": len(ACTIVE_SOCKETS)}
 
