@@ -11,6 +11,7 @@ import torch
 from torch import nn
 
 from intentflow.offline.models.eeg_transformer import EEGTransformerTiny
+from intentflow.offline.models.eegencoder import EEGEncoder
 from intentflow.offline.models.eegnet_lawhern import EEGNet
 
 
@@ -21,6 +22,8 @@ def build_model(name: str, in_ch: int, time_steps: int, n_classes: int = 2) -> n
     return EEGNet(in_ch=in_ch, n_classes=n_classes, T=time_steps)
   if model_name == "transformer":
     return EEGTransformerTiny(in_ch=in_ch, n_classes=n_classes, T=time_steps)
+  if model_name == "eegencoder":
+    return EEGEncoder(in_ch=in_ch, n_classes=n_classes, T=time_steps)
   raise ValueError(f"Unknown model: {name}")
 
 
@@ -67,7 +70,12 @@ def parse_args() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description="Export intentflow checkpoints to ONNX")
   parser.add_argument("--ckpt", type=str, required=True, help="Checkpoint file path")
   parser.add_argument("--out", type=str, required=True, help="Destination ONNX path")
-  parser.add_argument("--model", type=str, choices=["eegnet", "transformer"], help="Model name")
+  parser.add_argument(
+    "--model",
+    type=str,
+    choices=["eegnet", "transformer", "eegencoder"],
+    help="Model name",
+  )
   parser.add_argument("--stats-out", type=str, default=None, help="Optional JSON path for normalization stats")
   return parser.parse_args()
 

@@ -14,6 +14,7 @@ from torch.utils.data import DataLoader
 
 from intentflow.offline.data_npz import NPZDataset, apply_zscore, load_npz
 from intentflow.offline.models.eeg_transformer import EEGTransformerTiny
+from intentflow.offline.models.eegencoder import EEGEncoder
 from intentflow.offline.models.eegnet_lawhern import EEGNet
 
 
@@ -27,6 +28,8 @@ def build_model(name: str, in_ch: int, time_steps: int, n_classes: int = 2) -> n
     return EEGNet(in_ch=in_ch, n_classes=n_classes, T=time_steps)
   if name == "transformer":
     return EEGTransformerTiny(in_ch=in_ch, n_classes=n_classes, T=time_steps)
+  if name == "eegencoder":
+    return EEGEncoder(in_ch=in_ch, n_classes=n_classes, T=time_steps)
   raise ValueError(f"Unknown model: {name}")
 
 

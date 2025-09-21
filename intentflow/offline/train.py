@@ -20,6 +20,7 @@ from intentflow.offline.data_npz import (
   train_val_split,
 )
 from intentflow.offline.models.eeg_transformer import EEGTransformerTiny
+from intentflow.offline.models.eegencoder import EEGEncoder
 from intentflow.offline.models.eegnet_lawhern import EEGNet
 
 
@@ -38,6 +39,8 @@ def build_model(name: str, in_ch: int, time_steps: int, n_classes: int = 2) -> n
     return EEGNet(in_ch=in_ch, n_classes=n_classes, T=time_steps)
   if name == "transformer":
     return EEGTransformerTiny(in_ch=in_ch, n_classes=n_classes, T=time_steps)
+  if name == "eegencoder":
+    return EEGEncoder(in_ch=in_ch, n_classes=n_classes, T=time_steps)
   raise ValueError(f"Unknown model: {name}")
 
 
@@ -128,7 +131,13 @@ def parse_args() -> argparse.Namespace:
   """Parse command line arguments for the training script."""
   parser = argparse.ArgumentParser(description="Train intentflow offline models on NPZ data")
   parser.add_argument("--npz", type=str, default="data/processed/mi_dummy.npz", help="Path to NPZ dataset")
-  parser.add_argument("--model", type=str, default="eegnet", choices=["eegnet", "transformer"], help="Model name")
+  parser.add_argument(
+    "--model",
+    type=str,
+    default="eegnet",
+    choices=["eegnet", "transformer", "eegencoder"],
+    help="Model name",
+  )
   parser.add_argument("--epochs", type=int, default=15, help="Number of training epochs")
   parser.add_argument("--batch", type=int, default=64, help="Batch size")
   parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
