@@ -30,7 +30,6 @@ data/raw/
 data/interim/
 data/processed/
 data/external/
-models/
 checkpoints/
 logs/
 *.onnx
