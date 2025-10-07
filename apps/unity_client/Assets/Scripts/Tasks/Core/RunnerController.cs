@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 namespace Tasks.Runner3Lane.Core
@@ -5,27 +6,37 @@ namespace Tasks.Runner3Lane.Core
     public class RunnerController : MonoBehaviour
     {
         [Header("Movement")]
-        public float forwardSpeed = 6f;
-        public float laneWidth = 2f;
-        public float laneChangeLerp = 12f;
+        [SerializeField] private float forwardSpeed = 6f;
+        [SerializeField] private float laneWidth = 2f;
+        [SerializeField] private float laneChangeLerp = 12f;
 
-        private int _currentLane = 1;
+        public event Action<Obstacle> Collided;
 
-        private float TargetX => (_currentLane - 1) * laneWidth;
+        public int CurrentLane { get; private set; } = 1;
+
+        public float ForwardSpeed
+        {
+            get => forwardSpeed;
+            set => forwardSpeed = Mathf.Max(0f, value);
+        }
+
+        public float LaneWidth => laneWidth;
+
+        private float TargetX => (CurrentLane - 1) * laneWidth;
 
         public void MoveLeft()
         {
-            if (_currentLane > 0)
+            if (CurrentLane > 0)
             {
-                _currentLane--;
+                CurrentLane--;
             }
         }
 
         public void MoveRight()
         {
-            if (_currentLane < 2)
+            if (CurrentLane < 2)
             {
-                _currentLane++;
+                CurrentLane++;
             }
         }
 
@@ -35,6 +46,14 @@ namespace Tasks.Runner3Lane.Core
             var pos = transform.position;
             pos.x = Mathf.Lerp(pos.x, TargetX, 1f - Mathf.Exp(-laneChangeLerp * Time.deltaTime));
             transform.position = pos;
+        }
+
+        private void OnTriggerEnter(Collider other)
+        {
+            if (other.TryGetComponent<Obstacle>(out var obstacle))
+            {
+                Collided?.Invoke(obstacle);
+            }
         }
     }
 }

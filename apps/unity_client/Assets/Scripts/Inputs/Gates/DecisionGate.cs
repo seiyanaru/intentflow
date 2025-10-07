@@ -14,15 +14,13 @@ namespace IntentFlow.Inputs.Gates
         private IIntentSource _source;
         private float _lastFireAt = -999f;
 
-        private void Awake()
+        private void Awake() => CacheSource();
+
+        private void OnValidate()
         {
-            if (sourceBehaviour is IIntentSource intentSource)
+            if (!Application.isPlaying)
             {
-                _source = intentSource;
-            }
-            else if (sourceBehaviour != null)
-            {
-                Debug.LogError($"DecisionGate source {sourceBehaviour.name} does not implement IIntentSource", this);
+                CacheSource();
             }
         }
 
@@ -52,6 +50,33 @@ namespace IntentFlow.Inputs.Gates
             _lastFireAt = Time.time;
             signal = raw;
             return true;
+        }
+
+        public void SetSource(MonoBehaviour behaviour)
+        {
+            sourceBehaviour = behaviour;
+            CacheSource();
+            _lastFireAt = -999f;
+        }
+
+        public void SetSource(IIntentSource source)
+        {
+            _source = source;
+            sourceBehaviour = source as MonoBehaviour;
+            _lastFireAt = -999f;
+        }
+
+        private void CacheSource()
+        {
+            if (sourceBehaviour is IIntentSource intentSource)
+            {
+                _source = intentSource;
+            }
+            else if (sourceBehaviour != null)
+            {
+                Debug.LogError($"DecisionGate source {sourceBehaviour.name} does not implement IIntentSource", this);
+                _source = null;
+            }
         }
     }
 }

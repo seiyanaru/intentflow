@@ -5,14 +5,36 @@ namespace Tasks.Runner3Lane.Core
     [RequireComponent(typeof(Collider))]
     public class Obstacle : MonoBehaviour
     {
-        private void OnTriggerEnter(Collider other)
+        private ObjectPool<Obstacle> _pool;
+        private float _despawnAt;
+        private float _lifetime;
+
+        public void Activate(ObjectPool<Obstacle> pool, float lifetime)
         {
-            var gm = FindObjectOfType<RunnerGameManager>();
-            if (gm)
+            _pool = pool;
+            _lifetime = Mathf.Max(0f, lifetime);
+            _despawnAt = _lifetime > 0f ? Time.time + _lifetime : float.PositiveInfinity;
+            gameObject.SetActive(true);
+        }
+
+        public void Release()
+        {
+            if (_pool != null)
             {
-                gm.OnHitObstacle();
+                _pool.Release(this);
             }
-            Destroy(gameObject);
+            else
+            {
+                gameObject.SetActive(false);
+            }
+        }
+
+        private void Update()
+        {
+            if (Time.time >= _despawnAt)
+            {
+                Release();
+            }
         }
     }
 }
