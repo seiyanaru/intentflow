@@ -1,6 +1,6 @@
 using UnityEngine;
 
-namespace IntentFlow.Tasks.Runner3Lane.Core
+namespace Tasks.Runner3Lane.Core
 {
     public class RunnerGameManager : MonoBehaviour
     {
