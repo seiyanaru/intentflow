@@ -1,7 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
-using IntentFlow.Tasks.Runner3Lane.Core;
-using IntentFlow.Tasks.Runner3Lane.InputAdapters;
+using Tasks.Runner3Lane.Core;
+using Tasks.Runner3Lane.InputAdapters;
 
 namespace IntentFlow.Tasks.Runner3Lane.UI
 {

@@ -1,8 +1,8 @@
 using UnityEngine;
 using IntentFlow.Inputs;
-using IntentFlow.Tasks.Runner3Lane.Core;
+using Tasks.Runner3Lane.Core;
 
-namespace IntentFlow.Tasks.Runner3Lane.InputAdapters
+namespace Tasks.Runner3Lane.InputAdapters
 {
     public class RunnerInputAdapter : MonoBehaviour
     {
