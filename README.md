@@ -12,6 +12,7 @@ intentflow/
 ├─ .gitignore
 ├─ .gitattributes
 ├─ .pre-commit-config.yaml
+├─ setup_scaffold.sh
 ├─ configs/
 │   ├─ data.yaml
 │   ├─ preprocess.yaml
@@ -40,16 +41,21 @@ intentflow/
 │   │   │   ├─ ciacnet.py
 │   │   │   ├─ mamba_encoder.py
 │   │   │   ├─ eegnet.py
+│   │   │   ├─ eeg_transformer.py
+│   │   │   ├─ eegnet_lawhern.py
 │   │   │   └─ registry.py
 │   │   ├─ train.py
 │   │   ├─ eval.py
 │   │   ├─ export_onnx.py
-│   │   └─ distill.py
+│   │   ├─ distill.py
+│   │   └─ data_npz.py
 │   ├─ online/
 │   │   ├─ inference/
 │   │   │   ├─ tcnet_head.py
 │   │   │   ├─ runner.py
-│   │   │   └─ stabilizer.py
+│   │   │   ├─ stabilizer.py
+│   │   │   ├─ worker.py
+│   │   │   └─ onnx_model.py
 │   │   ├─ adapt/
 │   │   │   ├─ otta.py
 │   │   │   ├─ head_ft.py
@@ -61,6 +67,8 @@ intentflow/
 │   │   ├─ recorder/
 │   │   │   ├─ logger.py
 │   │   │   └─ replay.py
+│   │   ├─ dsp/
+│   │   │   └─ filters.py
 │   │   └─ cli.py
 │   └─ datasets/
 │       ├─ bci_iv_2a.py
@@ -75,7 +83,11 @@ intentflow/
 │   ├─ simulate.py
 │   ├─ calibrate.py
 │   ├─ bench_latency.py
-│   └─ export_unity_input.py
+│   ├─ export_unity_input.py
+│   ├─ gen_intents_demo.py
+│   ├─ make_dummy_mi_npz.py
+│   ├─ replay_intents_to_control.py
+│   └─ replay_npz_to_ingest.py
 ├─ deployment/
 │   ├─ docker/
 │   │   ├─ Dockerfile.offline
@@ -89,12 +101,15 @@ intentflow/
 │   ├─ test_filters.py
 │   ├─ test_runner.py
 │   ├─ test_adapt.py
-│   └─ test_ws_protocol.py
+│   ├─ test_ws_protocol.py
+│   ├─ test_eegencoder_shape.py
+│   ├─ test_ingest_pipeline.py
+│   └─ test_models_and_flow.py
 └─ docs/
     ├─ DESIGN.md
     ├─ CALIBRATION.md
     ├─ PROTOCOL.md
-    └─ ADR/.gitkeep
+    └─ ADR/
 ```
 
 ## 3. クイックスタート
