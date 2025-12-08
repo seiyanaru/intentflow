@@ -1,0 +1,14 @@
+mne==1.6.1
+numpy==1.24.4
+scikit-learn==1.3.2
+moabb==1.0.0
+torch==2.1.2
+braindecode==0.8.1
+PyYAML==6.0.1
+pytorch-lightning==2.1.3
+einops==0.7.0
+torchvision==0.16.2
+scipy==1.10.1
+matplotlib==3.7.5
+pandas==1.5.3
+fsspec>=2022.5.0

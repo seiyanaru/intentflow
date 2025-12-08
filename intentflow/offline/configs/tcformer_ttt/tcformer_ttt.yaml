@@ -1,0 +1,96 @@
+# general
+dataset_name: "" # options: "bcic2a", "bcic2b", "bcic3", "reh_mi", or "hgd".
+                 # Note: This value will be overridden if specified in train_test.py
+                 # or if passed as a command-line argument (e.g., --dataset bcic2a).
+                 
+subject_ids: "all" # options: "all", an integer (e.g., 1), or a list of integers (e.g., [1, 2, 3]).
+max_epochs: 1000
+max_epochs_2b: 50 # for bcic2b
+max_epochs_loso: 50
+max_epochs_loso_hgd: 50
+seed: 42 # Random seed for reproducibility. 
+
+# preprocessing
+z_scale: True
+interaug: True
+data_path: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
+
+preprocessing:
+  bcic2a:
+    sfreq: 250
+    low_cut: null
+    high_cut: null
+    start: 0.0
+    stop: 4.0
+    batch_size: 48
+  bcic2b:
+    sfreq: 250
+    low_cut: null
+    high_cut: null
+    start: 0.0
+    stop: -0.5
+    batch_size: 48
+  bcic3:
+    sfreq: 100
+    low_cut: 0
+    high_cut: 40
+    start: 0.0
+    stop: 0.0
+    batch_size: 28
+    channel_selection: True
+  reh_mi:
+    sfreq: 128
+    low_cut: 4
+    high_cut: 50
+    start: 0.0
+    stop: 0.0
+    batch_size: 48
+  hgd:
+    sfreq: 250
+    low_cut: 4
+    high_cut: null
+    start: 0.0
+    stop: 0.0
+    batch_size: 48
+    remove_artifacts: True
+  bcic4_2a:
+    sfreq: 250
+    low_cut: null
+    high_cut: null
+    start: 0.0
+    stop: 4.0
+    batch_size: 48
+
+# model
+model: "TCFormer_TTT"
+
+model_kwargs:
+  F1: 32
+  temp_kernel_lengths: [20, 32, 64]
+  d_group: 16
+  D: 2
+  pool_length_1: 8
+  pool_length_2: 7
+  dropout_conv: 0.4
+  use_group_attn: True # Kept for compatibility but not used in TTT directly
+
+  # Transformer parameters (Grouped query attention paramerters) - Some reused for TTT
+  q_heads : 4
+  kv_heads : 2 # number of kv groups - Kept for config compatibility
+  trans_depth: 2
+  trans_dropout: 0.4  # 0.4 and path drop = 0.25
+  
+  # Optimization parameters
+  lr: 0.001
+  weight_decay: 0.05
+  patience: 10
+  min_epochs: 20
+  
+  # TTT Specific Configuration
+  ttt_config:
+    layer_type: "linear"
+    base_lr: 1.0
+    mini_batch_size: 16
+    share_qk: false
+    use_dual_form: true
+    learnable_init_state: false
