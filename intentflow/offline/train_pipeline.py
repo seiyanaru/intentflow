@@ -5,9 +5,8 @@ from datetime import datetime
 from argparse import ArgumentParser
 from pytorch_lightning import Trainer
 from pytorch_lightning.strategies import DDPStrategy
-# Import models and datamodules
-# Note: models are now under models.tcformer package
-# Datamodules are directly under datamodules package
+from pytorch_lightning.callbacks import EarlyStopping
+# from torchviz import make_dot  # optional for graph visualization
 
 from utils.plotting import plot_confusion_matrix, plot_curve
 from utils.metrics  import MetricsCallback, write_summary
@@ -51,15 +50,17 @@ def train_and_test(config):
     config["model_kwargs"]["n_classes"] = datamodule_cls.classes
     
     # Update data_path to absolute path if not set (fallback)
-    # The config already has the absolute path, but this is a safeguard
     if config["preprocessing"].get("data_path") is None:
         config["preprocessing"]["data_path"] = "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
 
     # Parse subject IDs from config
     subj_cfg = config["subject_ids"]
-    subject_ids = datamodule_cls.all_subject_ids if subj_cfg == "all" else \
-                  [subj_cfg] if isinstance(subj_cfg, int) else \
-                  subj_cfg
+    if subj_cfg == "all":
+        subject_ids = datamodule_cls.all_subject_ids
+    elif isinstance(subj_cfg, int):
+        subject_ids = [subj_cfg]
+    else:
+        subject_ids = subj_cfg
   
     # Initialize containers for tracking metrics across subjects
     test_accs, test_losses, test_kappas = [], [], []
@@ -73,6 +74,12 @@ def train_and_test(config):
         # Set seed for reproducibility
         seed_everything(config["seed"])
         metrics_callback = MetricsCallback()
+        early_stopping = EarlyStopping(
+            monitor="val_loss",
+            mode="min",
+            patience=50,
+            verbose=True
+        )
    
         # Initialize PyTorch Lightning Trainer
         trainer = Trainer(
@@ -85,16 +92,13 @@ def train_and_test(config):
                 else DDPStrategy(find_unused_parameters=True), 
             logger=False,
             enable_checkpointing=False,
-            callbacks=[metrics_callback]
+            callbacks=[metrics_callback, early_stopping]
         )
 
         # Instantiate datamodule and model
         datamodule = datamodule_cls(config["preprocessing"], subject_id=subject_id)
         model = model_cls(**config["model_kwargs"], max_epochs=config["max_epochs"])
 
-        # Optionally visualize the model graph
-        # visualize_model_graph(model, model_name=model_name)
-        
         # Count total number of model parameters
         param_count = sum(p.numel() for p in model.parameters())
 
@@ -124,7 +128,6 @@ def train_and_test(config):
         test_kappas.append(test_results[0]["test_kappa"])
 
         # compute & store this subject's confusion matrix
-        # The [C × C] tensor is inside the LightningModule:
         cm = model.test_confmat.numpy()
         all_confmats.append(cm)
 
@@ -197,13 +200,10 @@ def run():
     args = parse_arguments()
      
     # load config
-    # Try to find config in model subdirectory first, then fallback
     config_path = os.path.join(CONFIG_DIR, args.model, f"{args.model}.yaml")
     if not os.path.exists(config_path):
-        # Fallback for models without subdirectory or if file is directly in configs (legacy)
         config_path = os.path.join(CONFIG_DIR, f"{args.model}.yaml")
         if not os.path.exists(config_path):
-             # Try checking if model name has underscores (e.g. tcformer_ttt) and config is in folder
              pass 
              
     with open(config_path) as f:    

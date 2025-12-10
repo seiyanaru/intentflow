@@ -83,3 +83,5 @@ model_kwargs:
   scheduler: True
   warmup_epochs: 20  
   warmup_epochs_loso: 3
+  
+save_checkpoint: True

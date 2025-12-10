@@ -94,3 +94,5 @@ model_kwargs:
     share_qk: false
     use_dual_form: true
     learnable_init_state: false
+
+save_checkpoint: True
