@@ -5,6 +5,9 @@ def get_model_cls(model_name):
     elif model_name.lower() == "tcformer_ttt":
         from models.tcformer_ttt.tcformer_ttt import TCFormerTTT
         return TCFormerTTT
+    elif model_name.lower() == "tcformer_hybrid":
+        from models.tcformer_ttt.tcformer_hybrid import TCFormerHybrid
+        return TCFormerHybrid
     elif model_name == "ATCNet":
         from models.tcformer.atcnet import ATCNet
         return ATCNet

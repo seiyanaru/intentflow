@@ -48,6 +48,7 @@ class TTTConfig(PretrainedConfig):
         scan_checkpoint_group_size=0,
         use_dual_form=True,
         learnable_init_state=False,
+        ttt_reg_lambda=0.0,
         **kwargs,
     ):
         self.hidden_size = hidden_size
@@ -69,6 +70,7 @@ class TTTConfig(PretrainedConfig):
         self.scan_checkpoint_group_size = scan_checkpoint_group_size
         self.use_dual_form = use_dual_form
         self.learnable_init_state = learnable_init_state
+        self.ttt_reg_lambda = ttt_reg_lambda
         
         # Add intermediate_size for compatibility
         self.intermediate_size = kwargs.get("intermediate_size", hidden_size * 4)
@@ -555,6 +557,18 @@ class TTTLinear(TTTBase):
             XK_mini_batch = inputs["XK"]
             eta_mini_batch = inputs["eta"]
             
+            # --- Strategy 2: Regularized TTT ---
+            # Penalize deviation from initial weights: W_new = W - eta * lambda * (W - W_init)
+            # Effectively: W = (1 - alpha) * W + alpha * W_init
+            reg_lambda = self.config.ttt_reg_lambda
+            if reg_lambda > 0.0:
+                # Use base_lr for regularization step size to avoid instability
+                alpha = self.config.ttt_base_lr * reg_lambda
+                # Apply regularization (pull towards self.W1 / self.b1)
+                W1_init = (1.0 - alpha) * W1_init + alpha * self.W1.unsqueeze(0)
+                b1_init = (1.0 - alpha) * b1_init + alpha * self.b1.unsqueeze(0)
+            # -----------------------------------
+
             X1 = XK_mini_batch
             Z1 = X1 @ W1_init + b1_init
             reconstruction_target = XV_mini_batch - XK_mini_batch

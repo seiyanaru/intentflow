@@ -190,6 +190,8 @@ def parse_arguments():
                         help="Enable inter-trial augmentation (overrides config if specified)")
     parser.add_argument("--no_interaug", action="store_true", 
                         help="Disable inter-trial augmentation (overrides config if specified)")
+    parser.add_argument("--model_kwargs", type=str, default=None,
+                        help="JSON string to override model_kwargs (e.g. '{\"ttt_config\": {\"base_lr\": 0.1}}')")
     return parser.parse_args()
 
 # ----------------------------------------------
@@ -208,6 +210,26 @@ def run():
              
     with open(config_path) as f:    
         config = yaml.safe_load(f)
+
+    # Merge CLI model_kwargs overrides
+    if args.model_kwargs:
+        import json
+        try:
+            overrides = json.loads(args.model_kwargs)
+            # Deep merge helper
+            def deep_update(d, u):
+                for k, v in u.items():
+                    if isinstance(v, dict):
+                        d[k] = deep_update(d.get(k, {}), v)
+                    else:
+                        d[k] = v
+                return d
+            
+            deep_update(config["model_kwargs"], overrides)
+            print(f"Overridden model_kwargs: {overrides}")
+        except json.JSONDecodeError as e:
+            print(f"Error parsing --model_kwargs: {e}")
+            exit(1)
 
     # Adjust training parameters based on LOSO setting
     if args.loso:
