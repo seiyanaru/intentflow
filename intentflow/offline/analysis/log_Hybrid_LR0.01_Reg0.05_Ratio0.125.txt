@@ -1,0 +1,164 @@
+GPU available: True (cuda), used: True
+TPU available: False, using: 0 TPU cores
+/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/contextlib.py:144: RuntimeWarning: Channel names are not unique, found duplicates for: {'EEG'}. Applying running numbers for duplicates.
+  next(self.gen)
+/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/contextlib.py:144: RuntimeWarning: Channel names are not unique, found duplicates for: {'EEG'}. Applying running numbers for duplicates.
+  next(self.gen)
+/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/braindecode/preprocessing/preprocess.py:71: UserWarning: Preprocessing choices with lambda functions cannot be saved.
+  warn("Preprocessing choices with lambda functions cannot be saved.")
+/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/braindecode/preprocessing/windowers.py:306: UserWarning: Drop bad windows only has an effect if mne epochs are created, and this argument may be removed in the future.
+  warnings.warn(
+Overridden model_kwargs: {'ttt_config': {'base_lr': 0.01, 'ttt_reg_lambda': 0.05}, 'adapter_ratio': 0.125}
+
+>>> Training on subject: 1
+Setting all random seeds to 42, cuda_available=True
+Skipping /workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/A01E.gdf: No target events found.
+Unique descriptions in annotations: {'770', '771', '276', '768', '769', '772', '277', '1023', '1072', '32766'}
+Used Annotations descriptions: ['769', '770', '771', '772']
+LOCAL_RANK: 0 - CUDA_VISIBLE_DEVICES: [0]
+
+  | Name       | Type                      | Params | Mode  | FLOPs
+-------------------------------------------------------------------------
+0 | model      | TCFormerHybridModule      | 76.3 K | train | 0    
+1 | test_kappa | MulticlassCohenKappa      | 0      | train | 0    
+2 | test_cm    | MulticlassConfusionMatrix | 0      | train | 0    
+-------------------------------------------------------------------------
+76.3 K    Trainable params
+0         Non-trainable params
+76.3 K    Total params
+0.305     Total estimated model params size (MB)
+112       Modules in train mode
+0         Modules in eval mode
+0         Total Flops
+Warning: 'session_E' not found (labels likely missing). Splitting 'session_T' for train/test.
+Loaded run 0: X shape (288, 22, 1000), y shape (288,)
+Total X shape: (288, 22, 1000), Total y shape: (288,)
+Training: |          | 0/? [00:00<?, ?it/s]Training: |          | 0/? [00:00<?, ?it/s]Epoch 0:   0%|          | 0/5 [00:00<?, ?it/s]Traceback (most recent call last):
+  File "/workspace-cloud/seiya.narukawa/intentflow/intentflow/offline/train_pipeline.py", line 267, in <module>
+    run()
+  File "/workspace-cloud/seiya.narukawa/intentflow/intentflow/offline/train_pipeline.py", line 264, in run
+    train_and_test(config)
+  File "/workspace-cloud/seiya.narukawa/intentflow/intentflow/offline/train_pipeline.py", line 107, in train_and_test
+    trainer.fit(model, datamodule=datamodule)
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 584, in fit
+    call._call_and_handle_interrupt(
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/trainer/call.py", line 49, in _call_and_handle_interrupt
+    return trainer_fn(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 630, in _fit_impl
+    self._run(model, ckpt_path=ckpt_path, weights_only=weights_only)
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 1079, in _run
+    results = self._run_stage()
+              ^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/trainer/trainer.py", line 1123, in _run_stage
+    self.fit_loop.run()
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/loops/fit_loop.py", line 217, in run
+    self.advance()
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/loops/fit_loop.py", line 465, in advance
+    self.epoch_loop.run(self._data_fetcher)
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/loops/training_epoch_loop.py", line 153, in run
+    self.advance(data_fetcher)
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/loops/training_epoch_loop.py", line 352, in advance
+    batch_output = self.automatic_optimization.run(trainer.optimizers[0], batch_idx, kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 192, in run
+    self._optimizer_step(batch_idx, closure)
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 270, in _optimizer_step
+    call._call_lightning_module_hook(
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/trainer/call.py", line 177, in _call_lightning_module_hook
+    output = fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/core/module.py", line 1368, in optimizer_step
+    optimizer.step(closure=optimizer_closure)
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/core/optimizer.py", line 154, in step
+    step_output = self._strategy.optimizer_step(self._optimizer, closure, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/strategies/strategy.py", line 239, in optimizer_step
+    return self.precision_plugin.optimizer_step(optimizer, model=model, closure=closure, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/plugins/precision/precision.py", line 123, in optimizer_step
+    return optimizer.step(closure=closure, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/optim/optimizer.py", line 373, in wrapper
+    out = func(*args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/optim/optimizer.py", line 76, in _use_grad
+    ret = func(self, *args, **kwargs)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/optim/adam.py", line 143, in step
+    loss = closure()
+           ^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/plugins/precision/precision.py", line 109, in _wrap_closure
+    closure_result = closure()
+                     ^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 146, in __call__
+    self._result = self.closure(*args, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/utils/_contextlib.py", line 115, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 131, in closure
+    step_output = self._step_fn()
+                  ^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/loops/optimization/automatic.py", line 319, in _training_step
+    training_step_output = call._call_strategy_hook(trainer, "training_step", *kwargs.values())
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/trainer/call.py", line 329, in _call_strategy_hook
+    output = fn(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/pytorch_lightning/strategies/strategy.py", line 391, in training_step
+    return self.lightning_module.training_step(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace-cloud/seiya.narukawa/intentflow/intentflow/offline/models/tcformer/classification_module.py", line 99, in training_step
+    loss, _ = self.shared_step(batch, batch_idx, mode="train")
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace-cloud/seiya.narukawa/intentflow/intentflow/offline/models/tcformer/classification_module.py", line 121, in shared_step
+    y_hat = self.forward(x)
+            ^^^^^^^^^^^^^^^
+  File "/workspace-cloud/seiya.narukawa/intentflow/intentflow/offline/models/tcformer/classification_module.py", line 71, in forward
+    return self.model(x)
+           ^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1518, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1527, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace-cloud/seiya.narukawa/intentflow/intentflow/offline/models/tcformer_ttt/tcformer_hybrid.py", line 236, in forward
+    x = self.conv_block(x)
+        ^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1518, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1527, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace-cloud/seiya.narukawa/intentflow/intentflow/offline/models/tcformer/tcformer.py", line 124, in forward
+    feats = [conv(x) for conv in self.temporal_convs] # list of (B, F1, C, T')
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace-cloud/seiya.narukawa/intentflow/intentflow/offline/models/tcformer/tcformer.py", line 124, in <listcomp>
+    feats = [conv(x) for conv in self.temporal_convs] # list of (B, F1, C, T')
+             ^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1518, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1527, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/nn/modules/container.py", line 215, in forward
+    input = module(input)
+            ^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1518, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/nn/modules/module.py", line 1527, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/nn/modules/conv.py", line 460, in forward
+    return self._conv_forward(input, self.weight, self.bias)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/islab-shi/anaconda3/envs/intentflow/lib/python3.11/site-packages/torch/nn/modules/conv.py", line 456, in _conv_forward
+    return F.conv2d(input, weight, bias, self.stride,
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.cuda.OutOfMemoryError: CUDA out of memory. Tried to allocate 258.00 MiB. GPU 0 has a total capacty of 10.75 GiB of which 147.88 MiB is free. Process 2712545 has 10.19 GiB memory in use. Including non-PyTorch memory, this process has 198.00 MiB memory in use. Of the allocated memory 16.61 MiB is allocated by PyTorch, and 5.39 MiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting max_split_size_mb to avoid fragmentation.  See documentation for Memory Management and PYTORCH_CUDA_ALLOC_CONF
+Epoch 0:   0%|          | 0/5 [00:02<?, ?it/s]

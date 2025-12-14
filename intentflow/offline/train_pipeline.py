@@ -97,7 +97,13 @@ def train_and_test(config):
 
         # Instantiate datamodule and model
         datamodule = datamodule_cls(config["preprocessing"], subject_id=subject_id)
-        model = model_cls(**config["model_kwargs"], max_epochs=config["max_epochs"])
+        model = model_cls(
+            **config["model_kwargs"], 
+            max_epochs=config["max_epochs"],
+            subject_id=subject_id,          # Pass subject ID for file naming
+            model_name=model_name,          # Pass model name
+            results_dir=result_dir          # Pass directory for saving analysis files
+        )
 
         # Count total number of model parameters
         param_count = sum(p.numel() for p in model.parameters())
@@ -155,6 +161,14 @@ def train_and_test(config):
     # Summarize and save final results
     write_summary(result_dir, model_name, dataset_name, subject_ids, param_count,
         test_accs, test_losses, test_kappas, train_times, test_times, response_times)
+    
+    # Save Final Accuracy Dictionary for plotting
+    import json
+    final_acc_dict = {f"Subject_{sid}": acc for sid, acc in zip(subject_ids, test_accs)}
+    final_acc_dict["Average"] = np.mean(test_accs)
+    final_acc_path = result_dir / f"final_acc_{model_name}.json"
+    with open(final_acc_path, 'w') as f:
+        json.dump(final_acc_dict, f, indent=4)
     
     # plot the average if requested
     if config.get("plot_cm_average", True) and all_confmats:
@@ -242,7 +256,11 @@ def run():
 
     config["preprocessing"] = config["preprocessing"][args.dataset]
     config["preprocessing"]["z_scale"] = config["z_scale"]
-    config["preprocessing"]["data_path"] = config.get("data_path", None)
+    # Select appropriate data path based on dataset
+    if args.dataset == "bcic2b":
+        config["preprocessing"]["data_path"] = config.get("data_path_2b", config.get("data_path", None))
+    else:
+        config["preprocessing"]["data_path"] = config.get("data_path", None)
     # Override interaug if specified
     if args.interaug:
         config["preprocessing"]["interaug"] = True

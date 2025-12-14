@@ -49,6 +49,8 @@ class TTTConfig(PretrainedConfig):
         use_dual_form=True,
         learnable_init_state=False,
         ttt_reg_lambda=0.0,
+        hybrid_ratio=1.0,
+        hybrid_reg=0.0,
         **kwargs,
     ):
         self.hidden_size = hidden_size
@@ -71,6 +73,8 @@ class TTTConfig(PretrainedConfig):
         self.use_dual_form = use_dual_form
         self.learnable_init_state = learnable_init_state
         self.ttt_reg_lambda = ttt_reg_lambda
+        self.hybrid_ratio = hybrid_ratio
+        self.hybrid_reg = hybrid_reg
         
         # Add intermediate_size for compatibility
         self.intermediate_size = kwargs.get("intermediate_size", hidden_size * 4)
@@ -547,6 +551,8 @@ class TTTLinear(TTTBase):
 
         # Enforce dual form usage as per requirement
         use_dual_form = self.config.use_dual_form
+        
+        hybrid_ratio = getattr(self.config, 'hybrid_ratio', 1.0)
 
         def compute_mini_batch(params_dict, inputs):
             W1_init = params_dict["W1_states"]
@@ -556,6 +562,17 @@ class TTTLinear(TTTBase):
             XV_mini_batch = inputs["XV"]
             XK_mini_batch = inputs["XK"]
             eta_mini_batch = inputs["eta"]
+            
+            # --- Apply Hybrid Ratio to eta ---
+            # If ratio < 1.0, mask eta for the later part of the mini-batch
+            if hybrid_ratio < 1.0:
+                mb_size = eta_mini_batch.shape[3]
+                cutoff = int(mb_size * hybrid_ratio)
+                if cutoff < mb_size:
+                    mask = torch.ones_like(eta_mini_batch)
+                    mask[:, :, cutoff:, :] = 0.0
+                    eta_mini_batch = eta_mini_batch * mask
+            # ---------------------------------
             
             # --- Strategy 2: Regularized TTT ---
             # Penalize deviation from initial weights: W_new = W - eta * lambda * (W - W_init)

@@ -14,6 +14,7 @@ seed: 42 # Random seed for reproducibility.
 z_scale: True
 interaug: True
 data_path: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
+data_path_2b: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2b_gdf/"
 
 preprocessing:
   bcic2a:

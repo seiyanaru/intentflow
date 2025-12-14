@@ -11,6 +11,7 @@ seed: 42
 z_scale: True
 interaug: True
 data_path: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
+data_path_2b: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2b_gdf/"
 
 preprocessing:
   bcic2a:
@@ -83,14 +84,19 @@ model_kwargs:
   patience: 10
   min_epochs: 20
   
-  # TTT Adapter Specific Configuration
+  # TTT Specific Configuration
   ttt_config:
     layer_type: "linear"
-    base_lr: 0.1 # Adaptive path learning rate
+    base_lr: 1.0
     mini_batch_size: 16
     share_qk: false
     use_dual_form: true
     learnable_init_state: false
-    ttt_reg_lambda: 0.01 # Regularization
+  
+  # Hybrid Learning Configuration (Optimal parameters from grid search)
+  hybrid_config:
+    lr: 0.1              # Learning rate for hybrid learning
+    reg: 0.05            # L2 regularization coefficient
+    ratio: 0.25          # Ratio of data used for hybrid learning (25%)
 
 save_checkpoint: True

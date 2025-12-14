@@ -109,6 +109,9 @@ class TCFormerTTTModule(nn.Module):
         if ttt_config is None:
             ttt_config = {}
             
+        # Extract Hybrid config if present
+        hybrid_config = kwargs.get("hybrid_config", {})
+        
         self.ttt_cfg = TTTConfig(
             hidden_size=self.F2, 
             num_hidden_layers=ttt_config.get("trans_depth", 2),
@@ -122,6 +125,9 @@ class TCFormerTTTModule(nn.Module):
             learnable_init_state=ttt_config.get("learnable_init_state", False),
             conv_kernel=4,
             intermediate_size=self.F2 * 4,
+            # Pass Hybrid parameters
+            hybrid_ratio=hybrid_config.get("ratio", 1.0), 
+            hybrid_reg=hybrid_config.get("reg", 0.0),
         )
         
         self.ttt_encoder = TTTEncoder(self.ttt_cfg)

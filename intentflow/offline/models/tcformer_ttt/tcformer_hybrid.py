@@ -118,7 +118,7 @@ class HybridBlock(nn.Module):
         return x
 
 class HybridEncoder(nn.Module):
-    def __init__(self, d_model, trans_depth, q_heads, kv_heads, ttt_config, drop_path_max=0.25):
+    def __init__(self, d_model, trans_depth, q_heads, kv_heads, ttt_config, adapter_ratio=0.25, drop_path_max=0.25):
         super().__init__()
         self.d_model = d_model
         
@@ -135,7 +135,7 @@ class HybridEncoder(nn.Module):
                 q_heads=q_heads,
                 kv_heads=kv_heads,
                 ttt_config=ttt_config,
-                adapter_ratio=0.25, # 1/4サイズのアダプターを使用
+                adapter_ratio=adapter_ratio, 
                 drop_path_rate=dpr[i]
             )
             for i in range(trans_depth)
@@ -173,6 +173,7 @@ class TCFormerHybridModule(nn.Module):
         q_heads=4,
         kv_heads=4,
         trans_depth=2,
+        adapter_ratio=0.25,
     ):
         super().__init__()
         
@@ -214,7 +215,8 @@ class TCFormerHybridModule(nn.Module):
             trans_depth=trans_depth,
             q_heads=q_heads,
             kv_heads=kv_heads,
-            ttt_config=self.ttt_cfg
+            ttt_config=self.ttt_cfg,
+            adapter_ratio=adapter_ratio
         )
         # 3. TCN Head (Classification - 共通)
         self.tcn_head = TCNHead(
@@ -254,7 +256,8 @@ class TCFormerHybrid(ClassificationModule):
             # Pass other params from kwargs or defaults
             trans_depth=kwargs.get("trans_depth", 2),
             q_heads=kwargs.get("q_heads", 4),
-            kv_heads=kwargs.get("kv_heads", 4)
+            kv_heads=kwargs.get("kv_heads", 4),
+            adapter_ratio=kwargs.get("adapter_ratio", 0.25)
         )
         super().__init__(model=model, n_classes=n_classes, **kwargs)
 

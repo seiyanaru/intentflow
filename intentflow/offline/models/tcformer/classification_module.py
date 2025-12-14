@@ -1,4 +1,7 @@
 import torch
+import numpy as np
+import os
+import json
 from torch.nn import functional as F
 from torch.optim.lr_scheduler import LambdaLR
 from torchmetrics.functional import accuracy
@@ -59,12 +62,41 @@ class ClassificationModule(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters(ignore=["model"])
         self.model = model
+        
+        # Identification info passed via kwargs, default to empty/unknown if not provided
+        self.subject_id = kwargs.get("subject_id", "unknown")
+        self.model_name = kwargs.get("model_name", "model")
+        self.results_dir = kwargs.get("results_dir", "results")
 
         # ── metrics ───────────────────────────────────────
         self.test_kappa = MulticlassCohenKappa(num_classes=n_classes)        
         self.test_cm = MulticlassConfusionMatrix(num_classes=n_classes)  
         # will hold the final cm on CPU after test
         self.test_confmat = None
+        
+        # ── storage for analysis ──────────────────────────
+        self.train_history = []
+        self.test_features = []
+        self.test_labels = []
+        self.test_logits = []
+        
+        # Register hook to capture features from the layer before classification
+        if hasattr(self.model, 'tcn_head'):
+            if hasattr(self.model.tcn_head, 'classifier'):
+                # Attach hook to the input of the classifier
+                self.model.tcn_head.classifier.register_forward_hook(self._feature_hook)
+            else:
+                 pass
+                 
+        self._captured_features = None
+
+    def _feature_hook(self, module, input, output):
+        # Input to the classifier is the feature vector
+        # input is a tuple (tensor,)
+        if isinstance(input, tuple):
+             self._captured_features = input[0].detach().cpu()
+        else:
+             self._captured_features = input.detach().cpu()
 
     # forward
     def forward(self, x):
@@ -103,8 +135,38 @@ class ClassificationModule(pl.LightningModule):
         loss, acc = self.shared_step(batch, batch_idx, mode="val")
         return {"val_loss": loss, "val_acc": acc}
 
+    def on_train_epoch_end(self):
+        # Collect metrics from trainer.logged_metrics
+        # Note: logged_metrics contains tensors on device
+        metrics = {k: v.item() if isinstance(v, torch.Tensor) else v 
+                  for k, v in self.trainer.logged_metrics.items()}
+        
+        # Filter for current epoch metrics relevant to history
+        epoch_metrics = {
+            "epoch": self.current_epoch,
+            "train_loss": metrics.get("train_loss", 0),
+            "train_acc": metrics.get("train_acc", 0),
+            "val_loss": metrics.get("val_loss", 0),
+            "val_acc": metrics.get("val_acc", 0)
+        }
+        self.train_history.append(epoch_metrics)
+
     def test_step(self, batch, batch_idx):
         loss, acc = self.shared_step(batch, batch_idx, mode="test")
+        
+        # Collect logits and features
+        x, y = batch
+        
+        if self._captured_features is not None:
+             self.test_features.append(self._captured_features)
+             self._captured_features = None # Reset
+        
+        with torch.no_grad():
+             logits = self.forward(x)
+        
+        self.test_logits.append(logits.detach().cpu())
+        self.test_labels.append(y.detach().cpu())
+
         return {"test_loss": loss, "test_acc": acc}
 
     # common logic
@@ -148,6 +210,31 @@ class ClassificationModule(pl.LightningModule):
             cm_percent = cm_counts.float() / row_sums * 100.0
 
         self.test_confmat = cm_percent.cpu()        # stash for plotting
+
+        # ── Save Analysis Data ───────────────────────────
+        if self.subject_id != "unknown":
+            os.makedirs(self.results_dir, exist_ok=True)
+            
+            # 1. Save History
+            history_path = os.path.join(self.results_dir, f"history_s{self.subject_id}_{self.model_name}.json")
+            with open(history_path, 'w') as f:
+                json.dump(self.train_history, f, indent=4)
+            
+            # 2. Save Features and Labels
+            if self.test_features:
+                features = torch.cat(self.test_features, dim=0).numpy()
+                labels = torch.cat(self.test_labels, dim=0).numpy()
+                features_path = os.path.join(self.results_dir, f"features_s{self.subject_id}_{self.model_name}.npz")
+                np.savez(features_path, features=features, labels=labels)
+                self.test_features = [] # clear
+                self.test_labels = []
+
+            # 3. Save Logits
+            if self.test_logits:
+                logits = torch.cat(self.test_logits, dim=0).numpy()
+                logits_path = os.path.join(self.results_dir, f"logits_s{self.subject_id}_{self.model_name}.npy")
+                np.save(logits_path, logits)
+                self.test_logits = [] # clear
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
         x, _ = batch
