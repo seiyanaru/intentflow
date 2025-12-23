@@ -123,25 +123,53 @@ intentflow/
    pip install -e .
    pre-commit install
    ```
-3. オフライン学習:
+3. 論文実験の再現 (Offline Experiments):
+   ```bash
+   # BCIC IV-2a データセットでの実験
+   ./intentflow/offline/scripts/run_paper_exp.sh --dataset bcic2a
+
+   # BCIC IV-2b データセットでの実験
+   ./intentflow/offline/scripts/run_paper_exp.sh --dataset bcic2b
+   ```
+   ※ 結果は `intentflow/offline/results/paper_experiments/` に保存されます。
+
+4. オフライン学習 (通常):
    ```bash
    python intentflow/offline/train.py --config configs/offline.yaml
    python intentflow/offline/eval.py --config configs/offline.yaml
    ```
-4. ONNX 書き出し:
+5. ONNX 書き出し:
    ```bash
    python intentflow/offline/export_onnx.py --checkpoint outputs/checkpoints/best.ckpt --onnx-path models/intentflow_head.onnx
    ```
-5. オンライン推論起動:
+6. オンライン推論起動:
    ```bash
    intentflow --config configs/online.yaml --host 0.0.0.0 --port 8000
    ```
-6. ダミー送信:
+7. ダミー送信:
    ```bash
    python scripts/simulate.py
    ```
 
-## 4. 設定ファイル解説
+## 4. 論文用オフライン実験モデル (TCFormer Hybrid)
+本リポジトリでは、以下の3つのモデルアーキテクチャを比較実験しています。
+
+1. **TCFormer (Base)**: ベースとなるTemporal Convolutional Transformer。
+2. **TCFormer_TTT**: 全層を Test-Time Training (TTT) レイヤーに置き換えたモデル。
+3. **TCFormer_Hybrid**: Self-AttentionとTTT Adapterを並列配置したハイブリッドモデル。
+
+### Hybrid Model Architecture
+![TCFormer Hybrid Architecture](hybrid_arch.png)
+
+Hybridモデルの詳細なアーキテクチャ、数式、処理フローについては、以下のドキュメントを参照してください：
+- [**README_Hybrid.md**](intentflow/offline/README_Hybrid.md)
+
+### 実験結果の構成
+実験スクリプトを実行すると、`intentflow/offline/results/paper_experiments/{dataset}/{timestamp}/` 以下にデータが生成されます。
+- `data/`: 学習履歴、テスト結果、特徴量データ (`.json`, `.npy`, `.npz`)
+- `figures/`: 生成された図表（t-SNE, Entropy, Confusion Matrix, Learning Curves）
+
+## 5. 設定ファイル解説
 - `configs/data.yaml`:
   - `dataset`: 使用データセット (`bci_iv_2a`, `bci_iv_2b`, `unicorn_live`)
   - `sample_rate`: EEG サンプリングレート
@@ -165,7 +193,7 @@ intentflow/
 - `configs/ports.yaml`:
   - `offline_dashboard`, `online_server`, `unity_bridge`: 各コンポーネントの待受ポート
 
-## 5. オンライン推論パイプライン
+## 6. オンライン推論パイプライン
 ```
 Acquisition → Preprocess → Inference → Stabilizer → Adapt → WS Broadcast
 ```
@@ -176,7 +204,7 @@ Acquisition → Preprocess → Inference → Stabilizer → Adapt → WS Broadca
 - Adapt: オンラインドメイン適応や ERRP フィードバックでモデルを調整。
 - WS Broadcast: WebSocket 経由でゲームクライアントへ送信。
 
-## 6. WebSocket プロトコル
+## 7. WebSocket プロトコル
 ### JSON 例
 ```json
 {
@@ -197,7 +225,7 @@ Acquisition → Preprocess → Inference → Stabilizer → Adapt → WS Broadca
 - `ts`: Unix 時刻秒。`meta` は柔軟なキーを想定。
 - `protocol_version`: 互換性管理用。
 
-## 7. 遅延KPIと安定化
+## 8. 遅延KPIと安定化
 - 目標レイテンシ: 300–500 ms（取得〜配信まで）。
 - 推奨設定:
   - N 連続一致: `n_consecutive = 3`
@@ -206,14 +234,14 @@ Acquisition → Preprocess → Inference → Stabilizer → Adapt → WS Broadca
   - 信頼度閾値: `conf >= 0.7`（±0.05 調整）
 - ベンチ: `python scripts/bench_latency.py` で推論・送信ループを測定し、KPI を記録。
 
-## 8. データ管理
+## 9. データ管理
 - `data/raw` は Git 管理対象外（`.gitignore` 参照）。DVC や Git LFS の利用を推奨。
 - BCI Competition IV-2a/2b:
   - `data/raw/bci_iv_2a/A01/` に `.gdf` を配置。
   - `data/raw/bci_iv_2b/B01/` など ID ごとに整理。
 - 前処理後の特徴量は `data/processed`、オンライン適応ログは `data/external` を利用。
 
-## 9. Unity/Unreal 接続
+## 10. Unity/Unreal 接続
 - クライアントはサブモジュール管理が推奨:
   ```bash
   git submodule add https://github.com/your-org/intentflow-unity-client apps/unity_client
@@ -223,18 +251,18 @@ Acquisition → Preprocess → Inference → Stabilizer → Adapt → WS Broadca
 - 推奨受信レート: 20–50 Hz（フレーム同期に合わせて補間）。
 - Unity/Unreal 双方で JSON パーサと信頼度フィルタを実装し、非同期処理でゲームプレイを阻害しないようにすること。
 
-## 10. 再現性
+## 11. 再現性
 - `intentflow/online/recorder/logger.py`: 生波形・特徴量・モデル出力・メトリクスを共通 `run_id` で保存。
 - `intentflow/online/recorder/replay.py`: 過去ログからオンライン経路を再生して UI/UX を検証。
 - `scripts/export_unity_input.py`: 同一 run を Unity 用フォーマットに変換。
 - 乱数シードは学習・推論両方で固定し、構成を `configs/*.yaml` に保存して追跡。
 
-## 11. CI/整形
+## 12. CI/整形
 - `pre-commit`: black・ruff・nbstripout を有効化してスタイルとノートブック差分を統制。
 - GitHub Actions (`deployment/ci/github-actions.yml`): lint → type check → pytest の最小ワークフローを提供。
 - Dockerfile を用いて offline/online ワークロードそれぞれを再現可能にする。
 
-## 12. ライセンス/貢献/謝辞
+## 13. ライセンス/貢献/謝辞
 - ライセンスは後日決定（暫定的に "All Rights Reserved"）。OSS 化時は Apache-2.0 を想定。
 - Issue/Pull Request での貢献歓迎。ガイドラインは今後 `CONTRIBUTING.md` へ集約予定。
 - EEG データセット提供者、オープンソース BCI コミュニティ、MI 研究コミュニティに感謝します。
