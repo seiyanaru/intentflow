@@ -23,43 +23,77 @@ def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict 
         # Local GDF loading
         datasets = []
         for subject_id in subject_ids:
-            # BCIC IV 2a filename convention
-            # A01T.gdf, A01E.gdf, etc.
             subj_str = f"{subject_id:02d}"
             
-            # Load both Training (T) and Evaluation (E) sessions
-            for session_code, suffix in [("session_T", "T"), ("session_E", "E")]:
-                filename = f"A{subj_str}{suffix}.gdf"
-                filepath = os.path.join(data_path, filename)
-                
-                if not os.path.exists(filepath):
-                    print(f"Warning: File {filepath} not found. Skipping.")
-                    continue
+            if dataset == "2a":
+                # BCIC IV 2a filename convention: A01T.gdf, A01E.gdf, etc.
+                for session_code, suffix in [("session_T", "T"), ("session_E", "E")]:
+                    filename = f"A{subj_str}{suffix}.gdf"
+                    filepath = os.path.join(data_path, filename)
                     
-                # Load raw data
-                try:
-                    raw = mne.io.read_raw_gdf(filepath, preload=True, verbose=verbose)
-                except Exception as e:
-                    print(f"Error loading {filepath}: {e}")
-                    continue
+                    if not os.path.exists(filepath):
+                        print(f"Warning: File {filepath} not found. Skipping.")
+                        continue
+                        
+                    # Load raw data
+                    try:
+                        raw = mne.io.read_raw_gdf(filepath, preload=True, verbose=verbose)
+                    except Exception as e:
+                        print(f"Error loading {filepath}: {e}")
+                        continue
 
-                # Check if raw contains target events
-                target_events = {'769', '770', '771', '772'}
-                # annotations.description is a numpy array of strings
-                if not any(event in raw.annotations.description for event in target_events):
-                    if verbose:
-                        print(f"Skipping {filepath}: No target events found.")
-                    continue
+                    # Check if raw contains target events (2a: 769-772)
+                    target_events = {'769', '770', '771', '772'}
+                    if not any(event in raw.annotations.description for event in target_events):
+                        if verbose:
+                            print(f"Skipping {filepath}: No target events found.")
+                        continue
 
-                # Prepare description
+                    description = pd.Series({
+                        "subject": subject_id,
+                        "session": session_code,
+                        "run": session_code
+                    })
+                    
+                    datasets.append(BaseDataset(raw, description))
+                    
+            elif dataset == "2b":
+                # BCIC IV 2b filename convention: B0101T.gdf, B0102T.gdf, ..., B0104E.gdf, B0105E.gdf
+                # Sessions 0,1,2 are Training (T), Sessions 3,4 are Evaluation (E)
+                for session_idx in range(5):  # 0-4
+                    if session_idx < 3:
+                        suffix = "T"
+                    else:
+                        suffix = "E"
+                    
+                    filename = f"B{subj_str}{session_idx+1:02d}{suffix}.gdf"
+                    filepath = os.path.join(data_path, filename)
+                    
+                    if not os.path.exists(filepath):
+                        print(f"Warning: File {filepath} not found. Skipping.")
+                        continue
+                        
+                    # Load raw data
+                    try:
+                        raw = mne.io.read_raw_gdf(filepath, preload=True, verbose=verbose)
+                    except Exception as e:
+                        print(f"Error loading {filepath}: {e}")
+                        continue
 
-                description = pd.Series({
-                    "subject": subject_id,
-                    "session": session_code,
-                    "run": session_code
-                })
-                
-                datasets.append(BaseDataset(raw, description))
+                    # Check if raw contains target events (2b: 769=left, 770=right)
+                    target_events = {'769', '770'}
+                    if not any(event in raw.annotations.description for event in target_events):
+                        if verbose:
+                            print(f"Skipping {filepath}: No target events found.")
+                        continue
+
+                    description = pd.Series({
+                        "subject": subject_id,
+                        "session": f"session_{session_idx}",
+                        "run": f"session_{session_idx}"
+                    })
+                    
+                    datasets.append(BaseDataset(raw, description))
         
         if not datasets:
             raise FileNotFoundError(f"No valid GDF files found in {data_path} for subjects {subject_ids}")
@@ -72,12 +106,12 @@ def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict 
         dataset = MOABBDataset(dataset_name, subject_ids=subject_ids)
 
     # Preprocessing pipeline
+    n_channels = 22 if dataset == "2a" else 3
     preprocessors = [
-        # Pick EEG channels. MNE usually detects them from GDF, but sometimes type setting is needed.
-        # For BCIC IV 2a, first 22 are EEG.
-        # Preprocessor("pick_types", eeg=True, meg=False, stim=False, verbose=verbose),
-        # Explicitly pick first 22 channels to avoid EOG
-        Preprocessor(lambda raw: raw.pick(range(22)), apply_on_array=False),
+        # Pick EEG channels based on dataset
+        # For BCIC IV 2a: first 22 are EEG
+        # For BCIC IV 2b: first 3 are EEG
+        Preprocessor(lambda raw: raw.pick(range(n_channels)), apply_on_array=False),
         Preprocessor(scale, factor=1e6, apply_on_array=True),
         Preprocessor("resample", sfreq=preprocessing_dict["sfreq"], verbose=verbose)
     ]
@@ -98,17 +132,23 @@ def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict 
     trial_start_offset_samples = int(preprocessing_dict["start"] * sfreq)
     trial_stop_offset_samples = int(preprocessing_dict["stop"] * sfreq)
     
-    # Event mapping for BCIC IV 2a
-    # 769: Left Hand, 770: Right Hand, 771: Foot, 772: Tongue
+    # Event mapping
+    # BCIC IV 2a: 769=Left Hand, 770=Right Hand, 771=Foot, 772=Tongue (4 classes)
+    # BCIC IV 2b: 769=Left Hand, 770=Right Hand (2 classes)
     if verbose:
         descriptions = set()
         for ds in dataset.datasets:
              descriptions.update(ds.raw.annotations.description)
         print("Unique descriptions in annotations:", descriptions)
 
-    mapping = {
-        '769': 0, '770': 1, '771': 2, '772': 3,
-    }
+    if dataset == "2a":
+        mapping = {
+            '769': 0, '770': 1, '771': 2, '772': 3,
+        }
+    else:  # 2b
+        mapping = {
+            '769': 0, '770': 1,
+        }
 
     
     # If using MOABB, mapping might differ or be handled internally, 

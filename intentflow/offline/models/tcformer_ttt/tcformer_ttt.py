@@ -85,6 +85,7 @@ class TCFormerTTTModule(nn.Module):
         dropout_conv=0.4,
         dropout_clf=0.5,
         ttt_config=None,
+        **kwargs  # Added to accept hybrid_config and other arguments
     ):
         super().__init__()
         
@@ -112,13 +113,18 @@ class TCFormerTTTModule(nn.Module):
         # Extract Hybrid config if present
         hybrid_config = kwargs.get("hybrid_config", {})
         
+        # Determine effective TTT parameters (override with hybrid_config if present)
+        base_lr = hybrid_config.get("lr", ttt_config.get("base_lr", 1.0))
+        reg_lambda = hybrid_config.get("reg", ttt_config.get("ttt_reg_lambda", 0.0))
+        ratio = hybrid_config.get("ratio", 1.0)
+
         self.ttt_cfg = TTTConfig(
             hidden_size=self.F2, 
             num_hidden_layers=ttt_config.get("trans_depth", 2),
             num_attention_heads=ttt_config.get("q_heads", 4),
             hidden_act="silu",
             ttt_layer_type=ttt_config.get("layer_type", "linear"),
-            ttt_base_lr=ttt_config.get("base_lr", 1.0),
+            ttt_base_lr=base_lr,
             mini_batch_size=ttt_config.get("mini_batch_size", 16),
             share_qk=ttt_config.get("share_qk", False),
             use_dual_form=ttt_config.get("use_dual_form", True),
@@ -126,8 +132,9 @@ class TCFormerTTTModule(nn.Module):
             conv_kernel=4,
             intermediate_size=self.F2 * 4,
             # Pass Hybrid parameters
-            hybrid_ratio=hybrid_config.get("ratio", 1.0), 
-            hybrid_reg=hybrid_config.get("reg", 0.0),
+            hybrid_ratio=ratio, 
+            ttt_reg_lambda=reg_lambda,
+            hybrid_reg=reg_lambda, # Keep for consistency if accessed elsewhere
         )
         
         self.ttt_encoder = TTTEncoder(self.ttt_cfg)

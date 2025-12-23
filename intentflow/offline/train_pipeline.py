@@ -27,14 +27,19 @@ def train_and_test(config):
     # Create result and checkpoints directories
     model_name = config["model"]
     dataset_name = config["dataset_name"]
-    seed = config["seed"]
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M") # Format: YYYYMMDD_HHMM (e.g., 20250517_1530)
-    aug_flag = config['preprocessing']['interaug']
-    gpu_id = config['gpu_id']
-    dir_name = "results/{}_{}_seed-{}_aug-{}_GPU{}_{}".format(
-        model_name, dataset_name, seed, aug_flag, gpu_id, timestamp
-    )
-    result_dir = Path(__file__).resolve().parent / dir_name
+    
+    if "results_dir" in config and config["results_dir"]:
+        result_dir = Path(config["results_dir"])
+    else:
+        seed = config["seed"]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M") # Format: YYYYMMDD_HHMM (e.g., 20250517_1530)
+        aug_flag = config['preprocessing']['interaug']
+        gpu_id = config['gpu_id']
+        dir_name = "results/{}_{}_seed-{}_aug-{}_GPU{}_{}".format(
+            model_name, dataset_name, seed, aug_flag, gpu_id, timestamp
+        )
+        result_dir = Path(__file__).resolve().parent / dir_name
+
     result_dir.mkdir(parents=True, exist_ok=True)
     for sub in ["checkpoints", "confmats", "curves"]: (result_dir / sub).mkdir(parents=True, exist_ok=True)
 
@@ -206,6 +211,8 @@ def parse_arguments():
                         help="Disable inter-trial augmentation (overrides config if specified)")
     parser.add_argument("--model_kwargs", type=str, default=None,
                         help="JSON string to override model_kwargs (e.g. '{\"ttt_config\": {\"base_lr\": 0.1}}')")
+    parser.add_argument("--results_dir", type=str, default=None,
+                        help="Directory to save results (overrides default timestamp-based directory)")
     return parser.parse_args()
 
 # ----------------------------------------------
@@ -278,6 +285,10 @@ def run():
     # set to True to plot confusion matrices
     config["plot_cm_per_subject"] = True # set to True to plot per-subject confusion matrices
     config["plot_cm_average"]     = True # set to True to plot average confusion matrix
+
+    # Set results_dir from args if provided
+    if args.results_dir:
+        config["results_dir"] = args.results_dir
 
     train_and_test(config)
 

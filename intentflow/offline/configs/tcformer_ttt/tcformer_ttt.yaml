@@ -29,7 +29,7 @@ preprocessing:
     low_cut: null
     high_cut: null
     start: 0.0
-    stop: -0.5
+    stop: 3.0  # Fixed 3.0 seconds (750 samples @ 250Hz)
     batch_size: 48
   bcic3:
     sfreq: 100
