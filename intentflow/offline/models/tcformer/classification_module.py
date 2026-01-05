@@ -79,6 +79,18 @@ class ClassificationModule(pl.LightningModule):
         self.test_features = []
         self.test_labels = []
         self.test_logits = []
+        # ── debug stats (optional; populated when model exposes them) ──
+        self.test_alpha = []
+        self.test_entropy = []
+        self.test_clip_ratio = []
+        self.test_group_attn_weights = []
+        self.test_conv_norm_pre = []
+        self.test_conv_norm_post = []
+        self.test_group_attn_gamma = []
+        self.test_gate_entropy = []
+        self.test_ttt_lr_scale = []
+        self.test_ttt_effective_base_lr = []
+        self.test_group_attn_temperature = []
         
         # Register hook to capture features from the layer before classification
         if hasattr(self.model, 'tcn_head'):
@@ -152,20 +164,68 @@ class ClassificationModule(pl.LightningModule):
         self.train_history.append(epoch_metrics)
 
     def test_step(self, batch, batch_idx):
-        loss, acc = self.shared_step(batch, batch_idx, mode="test")
-        
-        # Collect logits and features
+        """
+        IMPORTANT: run forward EXACTLY ONCE per batch.
+        TTT-based models may update internal state on forward; calling forward twice
+        contaminates metrics and debug signals.
+        """
         x, y = batch
-        
-        if self._captured_features is not None:
-             self.test_features.append(self._captured_features)
-             self._captured_features = None # Reset
-        
+
         with torch.no_grad():
-             logits = self.forward(x)
-        
-        self.test_logits.append(logits.detach().cpu())
+            y_hat = self.forward(x)
+
+        loss = F.cross_entropy(y_hat, y)
+        acc = accuracy(y_hat, y, task="multiclass", num_classes=self.hparams.n_classes)
+
+        # log scalar metrics
+        self.log("test_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
+        self.log("test_acc", acc, prog_bar=True, on_step=False, on_epoch=True)
+
+        preds = torch.argmax(y_hat, dim=-1)
+        self.test_kappa.update(preds, y)
+        self.test_cm.update(preds, y)
+        self.log("test_kappa", self.test_kappa, prog_bar=False, on_step=False, on_epoch=True)
+
+        # Collect features from hook (captured during the SAME forward call)
+        if self._captured_features is not None:
+            self.test_features.append(self._captured_features)
+            self._captured_features = None
+
+        # Store logits/labels for existing analysis pipeline
+        self.test_logits.append(y_hat.detach().cpu())
         self.test_labels.append(y.detach().cpu())
+
+        # ── Debug stats (alpha/entropy/clip/group weights/norms) ──
+        # Entropy from FINAL logits (user-selected)
+        p = torch.softmax(y_hat, dim=-1).clamp_min(1e-12)
+        entropy = -(p * p.log()).sum(dim=-1)  # [B]
+        self.test_entropy.append(entropy.detach().cpu())
+
+        # Model-provided debug batch stats (optional)
+        get_dbg = getattr(self.model, "get_debug_batch", None)
+        if callable(get_dbg):
+            dbg = get_dbg()
+            if dbg.get("alpha") is not None:
+                self.test_alpha.append(dbg["alpha"].detach().cpu())
+            if dbg.get("gate_entropy") is not None:
+                self.test_gate_entropy.append(dbg["gate_entropy"].detach().cpu())
+            if dbg.get("ttt_lr_scale") is not None:
+                self.test_ttt_lr_scale.append(dbg["ttt_lr_scale"].detach().cpu())
+            if dbg.get("ttt_effective_base_lr") is not None:
+                self.test_ttt_effective_base_lr.append(dbg["ttt_effective_base_lr"].detach().cpu())
+            if dbg.get("clip_ratio") is not None:
+                self.test_clip_ratio.append(dbg["clip_ratio"].detach().cpu())
+            if dbg.get("group_attn_weights") is not None:
+                self.test_group_attn_weights.append(dbg["group_attn_weights"].detach().cpu())
+            if dbg.get("conv_norm_pre") is not None:
+                self.test_conv_norm_pre.append(dbg["conv_norm_pre"].detach().cpu())
+            if dbg.get("conv_norm_post") is not None:
+                self.test_conv_norm_post.append(dbg["conv_norm_post"].detach().cpu())
+            if dbg.get("group_attn_gamma") is not None:
+                # scalar
+                self.test_group_attn_gamma.append(float(dbg["group_attn_gamma"]))
+            if dbg.get("group_attn_temperature") is not None:
+                self.test_group_attn_temperature.append(float(dbg["group_attn_temperature"]))
 
         return {"test_loss": loss, "test_acc": acc}
 
@@ -182,20 +242,24 @@ class ClassificationModule(pl.LightningModule):
 
         y_hat = self.forward(x)
         loss = F.cross_entropy(y_hat, y)
+
+        # Optional: Group-attention sparsity regularization (minimize entropy of group weights)
+        # This encourages "select one band/group" behavior rather than uniform 1/G.
+        lam_ga = float(self.hparams.get("group_attn_entropy_reg", 0.0) or 0.0)
+        if lam_ga > 0.0:
+            get_dbg = getattr(self.model, "get_debug_batch", None)
+            if callable(get_dbg):
+                dbg = get_dbg()
+                w = dbg.get("group_attn_weights", None)  # [B, G]
+                if w is not None and isinstance(w, torch.Tensor) and w.ndim == 2:
+                    w = w.clamp_min(1e-12)
+                    ga_entropy = -(w * w.log()).sum(dim=-1).mean()
+                    loss = loss + lam_ga * ga_entropy
+
         acc = accuracy(y_hat, y, task="multiclass", num_classes=self.hparams.n_classes)
         # log scalar metrics
         self.log(f"{mode}_loss", loss, prog_bar=True, on_step=False, on_epoch=True)
         self.log(f"{mode}_acc", acc, prog_bar=True, on_step=False, on_epoch=True)
-
-        if mode == "test":
-            preds = torch.argmax(y_hat, dim=-1)
-            # ── update epoch-level metrics ───────────────────────────
-            self.test_kappa.update(preds, y)                       # accumulate
-            self.test_cm.update(preds, y)
-            
-            self.log("test_kappa", self.test_kappa,                # Lightning will call .compute()
-                    prog_bar=False, on_step=False, on_epoch=True)
-
         return loss, acc
     
     # grab confusion matrix once per test epoch
@@ -235,6 +299,70 @@ class ClassificationModule(pl.LightningModule):
                 logits_path = os.path.join(self.results_dir, f"logits_s{self.subject_id}_{self.model_name}.npy")
                 np.save(logits_path, logits)
                 self.test_logits = [] # clear
+
+            # 4. Save Debug Stats (small json)
+            debug = {}
+
+            def _summarize_1d(name, arr):
+                if not arr:
+                    return
+                x = torch.cat(arr, dim=0).numpy()
+                debug[name] = {
+                    "mean": float(np.mean(x)),
+                    "p50": float(np.percentile(x, 50)),
+                    "p90": float(np.percentile(x, 90)),
+                }
+
+            _summarize_1d("alpha", self.test_alpha)
+            _summarize_1d("entropy", self.test_entropy)
+            _summarize_1d("gate_entropy", self.test_gate_entropy)
+            _summarize_1d("ttt_lr_scale", self.test_ttt_lr_scale)
+            _summarize_1d("ttt_effective_base_lr", self.test_ttt_effective_base_lr)
+            _summarize_1d("clip_ratio", self.test_clip_ratio)
+            _summarize_1d("conv_norm_pre", self.test_conv_norm_pre)
+            _summarize_1d("conv_norm_post", self.test_conv_norm_post)
+
+            # alpha-entropy correlation (Pearson r)
+            if self.test_alpha and self.test_entropy:
+                a = torch.cat(self.test_alpha, dim=0).numpy()
+                e = torch.cat(self.test_entropy, dim=0).numpy()
+                if len(a) >= 2 and np.std(a) > 1e-12 and np.std(e) > 1e-12:
+                    r = float(np.corrcoef(a, e)[0, 1])
+                else:
+                    r = None
+                debug["alpha_entropy_pearson_r"] = r
+
+            # group attn weights stats: [N, G]
+            if self.test_group_attn_weights:
+                w = torch.cat(self.test_group_attn_weights, dim=0).numpy()
+                debug["group_attn_weights"] = {
+                    "mean": [float(v) for v in np.mean(w, axis=0)],
+                    "std": [float(v) for v in np.std(w, axis=0)],
+                }
+
+            # gamma (scalar, last seen)
+            if self.test_group_attn_gamma:
+                debug["group_attn_gamma_last"] = float(self.test_group_attn_gamma[-1])
+            if self.test_group_attn_temperature:
+                debug["group_attn_temperature_last"] = float(self.test_group_attn_temperature[-1])
+
+            if debug:
+                debug_path = os.path.join(self.results_dir, f"debug_s{self.subject_id}_{self.model_name}.json")
+                with open(debug_path, "w") as f:
+                    json.dump(debug, f, indent=4)
+
+            # clear debug buffers
+            self.test_alpha = []
+            self.test_entropy = []
+            self.test_gate_entropy = []
+            self.test_ttt_lr_scale = []
+            self.test_ttt_effective_base_lr = []
+            self.test_clip_ratio = []
+            self.test_group_attn_weights = []
+            self.test_conv_norm_pre = []
+            self.test_conv_norm_post = []
+            self.test_group_attn_gamma = []
+            self.test_group_attn_temperature = []
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
         x, _ = batch

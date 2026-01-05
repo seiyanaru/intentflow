@@ -6,6 +6,7 @@ import seaborn as sns
 from sklearn.manifold import TSNE
 import argparse
 import glob
+import warnings
 
 # Set style for paper figures
 sns.set_style("whitegrid")
@@ -20,6 +21,30 @@ plt.rcParams.update({
     'savefig.dpi': 300
 })
 
+KNOWN_MODELS = [
+    ("TCFormer", "Base", "skyblue"),
+    ("TCFormer_TTT", "TTT", "orange"),
+    ("TCFormer_Hybrid", "Hybrid", "salmon"),
+]
+
+def available_models(data_dir):
+    """
+    Auto-detect which models are present in data_dir to avoid noisy warnings and empty plots.
+    We consider a model present if final_acc_*.json exists for it.
+    """
+    present = []
+    for model_name, disp, color in KNOWN_MODELS:
+        pattern = os.path.join(data_dir, f"final_acc_*{model_name}*.json")
+        if glob.glob(pattern):
+            present.append((model_name, disp, color))
+    # Fallback: if no final_acc exists yet, try to infer from any logits/features
+    if not present:
+        for model_name, disp, color in KNOWN_MODELS:
+            pat = os.path.join(data_dir, f"logits_s*_ *{model_name}*.npy").replace("_ *", "*")
+            if glob.glob(pat):
+                present.append((model_name, disp, color))
+    return present
+
 def load_history(data_dir, subject_id, model_name):
     # Search for history file
     # Pattern: history_s{subject_id}_{model_name}.json or similar
@@ -27,7 +52,6 @@ def load_history(data_dir, subject_id, model_name):
     matches = glob.glob(pattern) # removed recursive=True as data should be flat in data_dir
     
     if not matches:
-        print(f"Warning: history file for S{subject_id} {model_name} not found in {data_dir}")
         return None
 
     # If multiple, take the one with shortest name (exact match preference) or just first
@@ -39,45 +63,43 @@ def load_history(data_dir, subject_id, model_name):
 def load_features(data_dir, subject_id, model_name):
     pattern = os.path.join(data_dir, f"features_s{subject_id}_*{model_name}*.npz")
     matches = glob.glob(pattern)
-    
+
     if matches:
         path = matches[0]
         data = np.load(path)
         return data['features'], data['labels']
     else:
-        print(f"Warning: features file for S{subject_id} {model_name} not found in {data_dir}")
         return None, None
 
 def load_logits(data_dir, subject_id, model_name):
     pattern = os.path.join(data_dir, f"logits_s{subject_id}_*{model_name}*.npy")
     matches = glob.glob(pattern)
-    
+
     if matches:
         path = matches[0]
         return np.load(path)
     else:
-        print(f"Warning: logits file for S{subject_id} {model_name} not found in {data_dir}")
         return None
 
 def load_final_acc(data_dir, model_name):
     pattern = os.path.join(data_dir, f"final_acc_*{model_name}*.json")
     matches = glob.glob(pattern)
-    
+
     if matches:
         path = matches[0]
         with open(path, 'r') as f:
             return json.load(f)
     else:
-        print(f"Warning: final_acc file for {model_name} not found in {data_dir}")
         return None
 
 def plot_tsne_for_subject(data_dir, save_dir, subject_id):
-    models = ["TCFormer", "TCFormer_TTT", "TCFormer_Hybrid"]
-    display_names = ["Base", "TTT", "Hybrid"]
+    models = available_models(data_dir)
+    if not models:
+        return
     
-    plt.figure(figsize=(18, 5))
+    plt.figure(figsize=(6 * len(models), 5))
     
-    for i, (model_name, disp_name) in enumerate(zip(models, display_names)):
+    for i, (model_name, disp_name, _) in enumerate(models):
         features, labels = load_features(data_dir, subject_id, model_name)
         if features is None:
             continue
@@ -89,9 +111,9 @@ def plot_tsne_for_subject(data_dir, save_dir, subject_id):
 
         features_2d = tsne.fit_transform(features)
         
-        plt.subplot(1, 3, i+1)
+        plt.subplot(1, len(models), i+1)
         scatter = plt.scatter(features_2d[:, 0], features_2d[:, 1], c=labels, cmap='tab10', alpha=0.7)
-        if i == 2:
+        if i == len(models) - 1:
             plt.legend(*scatter.legend_elements(), title="Classes")
         plt.title(f"{disp_name} (S{subject_id})")
         plt.axis('off')
@@ -101,41 +123,49 @@ def plot_tsne_for_subject(data_dir, save_dir, subject_id):
     plt.close()
 
 def plot_entropy_for_subject(data_dir, save_dir, subject_id):
-    models = ["TCFormer", "TCFormer_TTT", "TCFormer_Hybrid"]
-    display_names = ["Base", "TTT", "Hybrid"]
-    colors = ['skyblue', 'orange', 'salmon']
+    models = available_models(data_dir)
+    if not models:
+        return
     
     def calc_entropy(logits):
-        probs = np.exp(logits) / np.sum(np.exp(logits), axis=1, keepdims=True)
+        # stable softmax
+        z = logits - np.max(logits, axis=1, keepdims=True)
+        e = np.exp(z)
+        probs = e / np.sum(e, axis=1, keepdims=True)
         entropy = -np.sum(probs * np.log(probs + 1e-9), axis=1)
         return entropy
 
     plt.figure(figsize=(8, 6))
     
-    for model_name, disp_name, color in zip(models, display_names, colors):
+    for model_name, disp_name, color in models:
         logits = load_logits(data_dir, subject_id, model_name)
         if logits is None:
             continue
         ent = calc_entropy(logits)
-        sns.kdeplot(ent, color=color, label=disp_name, fill=True, alpha=0.3)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FutureWarning)
+            sns.kdeplot(ent, color=color, label=disp_name, fill=True, alpha=0.3)
         
     plt.xlabel('Prediction Entropy')
     plt.ylabel('Density')
     plt.title(f"Entropy Distribution (S{subject_id})")
-    plt.legend()
+    handles, labels = plt.gca().get_legend_handles_labels()
+    if handles:
+        plt.legend()
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, f"entropy_subj{subject_id}_comparison.png"))
     plt.close()
 
 def plot_confmat_for_subject(data_dir, save_dir, subject_id):
-    models = ["TCFormer", "TCFormer_TTT", "TCFormer_Hybrid"]
-    display_names = ["Base", "TTT", "Hybrid"]
+    models = available_models(data_dir)
+    if not models:
+        return
     
-    plt.figure(figsize=(18, 5))
+    plt.figure(figsize=(6 * len(models), 5))
     
     from sklearn.metrics import confusion_matrix
     
-    for i, (model_name, disp_name) in enumerate(zip(models, display_names)):
+    for i, (model_name, disp_name, _) in enumerate(models):
         logits = load_logits(data_dir, subject_id, model_name)
         _, labels = load_features(data_dir, subject_id, model_name)
         
@@ -146,7 +176,7 @@ def plot_confmat_for_subject(data_dir, save_dir, subject_id):
         cm = confusion_matrix(labels, preds)
         cm_norm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
         
-        plt.subplot(1, 3, i+1)
+        plt.subplot(1, len(models), i+1)
         sns.heatmap(cm_norm, annot=True, fmt='.2f', cmap='Blues', cbar=False,
                     xticklabels=['LH', 'RH', 'Foot', 'Tongue'],
                     yticklabels=['LH', 'RH', 'Foot', 'Tongue'])
@@ -160,13 +190,13 @@ def plot_confmat_for_subject(data_dir, save_dir, subject_id):
     plt.close()
 
 def plot_learning_curve_for_subject(data_dir, save_dir, subject_id):
-    models = ["TCFormer", "TCFormer_TTT", "TCFormer_Hybrid"]
-    display_names = ["Base", "TTT", "Hybrid"]
-    colors = ['skyblue', 'orange', 'salmon']
+    models = available_models(data_dir)
+    if not models:
+        return
     
     plt.figure(figsize=(10, 5))
     
-    for model_name, disp_name, color in zip(models, display_names, colors):
+    for model_name, disp_name, color in models:
         hist = load_history(data_dir, subject_id, model_name)
         if hist is None:
             continue
@@ -179,33 +209,35 @@ def plot_learning_curve_for_subject(data_dir, save_dir, subject_id):
     plt.xlabel('Epoch')
     plt.ylabel('Validation Accuracy')
     plt.title(f"Learning Curve (S{subject_id})")
-    plt.legend()
+    handles, labels = plt.gca().get_legend_handles_labels()
+    if handles:
+        plt.legend()
     plt.ylim(0, 1.05)
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, f"learning_curve_subj{subject_id}_comparison.png"))
     plt.close()
 
 def plot_acc_comparison_bar(data_dir, save_dir):
-    models = ["TCFormer", "TCFormer_TTT", "TCFormer_Hybrid"]
-    display_names = ["Base", "TTT", "Hybrid"]
-    colors = ['skyblue', 'orange', 'salmon']
+    models = available_models(data_dir)
+    if not models:
+        return
     
     subjects = [f"S{i}" for i in range(1, 10)]
     all_accs = []
     
-    for model_name in models:
+    display_names = [m[1] for m in models]
+    colors = [m[2] for m in models]
+    for model_name, _, _ in models:
         acc_data = load_final_acc(data_dir, model_name)
-        if acc_data is None:
-            all_accs.append([0]*9)
-        else:
-            all_accs.append([acc_data.get(f"Subject_{i}", 0) * 100 for i in range(1, 10)])
+        all_accs.append([acc_data.get(f"Subject_{i}", 0) * 100 for i in range(1, 10)])
             
     x = np.arange(len(subjects))
-    width = 0.25
+    width = 0.8 / max(1, len(models))
     
     plt.figure(figsize=(12, 6))
     for i, (accs, name, color) in enumerate(zip(all_accs, display_names, colors)):
-        plt.bar(x + (i-1)*width, accs, width, label=name, color=color)
+        offset = (i - (len(models)-1)/2) * width
+        plt.bar(x + offset, accs, width, label=name, color=color)
         
     plt.ylabel('Accuracy (%)')
     plt.title('Accuracy Comparison per Subject')

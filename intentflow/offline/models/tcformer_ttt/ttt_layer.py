@@ -49,8 +49,16 @@ class TTTConfig(PretrainedConfig):
         use_dual_form=True,
         learnable_init_state=False,
         ttt_reg_lambda=0.0,
+        # Scales the self-supervised inner-loop objective (equivalently scales gradients).
+        # Use < 1.0 to reduce gradient norms and avoid "always clipped" saturation.
+        ttt_loss_scale: float = 1.0,
+        # How to scale the anchoring (regularization pull-back) step when lr_scale is used.
+        # - "none": do NOT scale anchoring (recommended; keeps stability on hard subjects)
+        # - "same": scale anchoring by lr_scale (previous behavior)
+        ttt_anchor_scale_mode: str = "none",
         hybrid_ratio=1.0,
         hybrid_reg=0.0,
+        ttt_grad_clip=1.0,
         **kwargs,
     ):
         self.hidden_size = hidden_size
@@ -73,8 +81,11 @@ class TTTConfig(PretrainedConfig):
         self.use_dual_form = use_dual_form
         self.learnable_init_state = learnable_init_state
         self.ttt_reg_lambda = ttt_reg_lambda
+        self.ttt_loss_scale = ttt_loss_scale
+        self.ttt_anchor_scale_mode = ttt_anchor_scale_mode
         self.hybrid_ratio = hybrid_ratio
         self.hybrid_reg = hybrid_reg
+        self.ttt_grad_clip = ttt_grad_clip
         
         # Add intermediate_size for compatibility
         self.intermediate_size = kwargs.get("intermediate_size", hidden_size * 4)
@@ -401,13 +412,20 @@ class TTTBase(nn.Module):
             )
         return XQ, XK, XV
 
-    def get_eta(self, X, mini_batch_step_offset, mini_batch_size):
+    def get_eta(self, X, mini_batch_step_offset, mini_batch_size, lr_scale: Optional[torch.Tensor] = None):
         ttt_lr = torch.einsum("bnkc,hdc->bhnkd", X, self.learnable_ttt_lr_weight) + self.learnable_ttt_lr_bias.reshape(
             1, -1, 1, 1, 1
         )
         ttt_lr = F.sigmoid(ttt_lr)
         ttt_lr = ttt_lr.permute(0, 1, 2, 4, 3)
-        ttt_lr_eta = self.config.ttt_base_lr * ttt_lr / self.head_dim
+        # Optional per-sample scaling of the TTT base learning rate (reactive adaptation).
+        # lr_scale: [B] or [B,1] -> broadcast to [B,1,1,1,1]
+        if lr_scale is None:
+            base_lr = self.config.ttt_base_lr
+        else:
+            lr_scale = lr_scale.reshape(-1).to(device=X.device, dtype=ttt_lr.dtype)
+            base_lr = self.config.ttt_base_lr * lr_scale.reshape(-1, 1, 1, 1, 1)
+        ttt_lr_eta = base_lr * ttt_lr / self.head_dim
 
         token_idx = self.token_idx + self.learnable_token_idx
         token_idx = token_idx[mini_batch_step_offset : mini_batch_step_offset + mini_batch_size]
@@ -425,7 +443,7 @@ class TTTBase(nn.Module):
         output = y * ttt_output
         return output
 
-    def get_ttt_inputs(self, inputs, mini_batch_size, cache_params):
+    def get_ttt_inputs(self, inputs, mini_batch_size, cache_params, lr_scale: Optional[torch.Tensor] = None):
         XQ = inputs["XQ"]
         XK = inputs["XK"]
         XV = inputs["XV"]
@@ -442,7 +460,7 @@ class TTTBase(nn.Module):
             mini_batch_step_offset = cache_params.seqlen_offset % self.mini_batch_size
         else:
             mini_batch_step_offset = 0
-        token_eta, ttt_lr_eta = self.get_eta(X, mini_batch_step_offset, mini_batch_size)
+        token_eta, ttt_lr_eta = self.get_eta(X, mini_batch_step_offset, mini_batch_size, lr_scale=lr_scale)
         eta = token_eta * ttt_lr_eta
         inputs = {
             "XQ": XQ,
@@ -463,11 +481,20 @@ class TTTBase(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         cache_params: Optional[TTTCache] = None,
+        lr_scale: Optional[torch.Tensor] = None,
     ):
         B, L = hidden_states.shape[:2]
         reminder_len = L % self.mini_batch_size
         num_mini_batch = L // self.mini_batch_size
         last_mini_batch_params_dict = None
+
+        # Store latest lr_scale for debugging (per-sample)
+        if lr_scale is not None:
+            self.last_lr_scale_per_sample = lr_scale.reshape(-1).detach()
+            self.last_effective_base_lr_per_sample = (self.config.ttt_base_lr * lr_scale.reshape(-1)).detach()
+        else:
+            self.last_lr_scale_per_sample = None
+            self.last_effective_base_lr_per_sample = None
 
         XQ, XK, XV = self.get_qkv_projections(hidden_states, cache_params=cache_params)
 
@@ -492,7 +519,7 @@ class TTTBase(nn.Module):
                 "X": hidden_states[:, : num_mini_batch * self.mini_batch_size],
             }
             output_mod, last_mini_batch_params_dict = self.ttt(
-                self.get_ttt_inputs(inputs, self.mini_batch_size, cache_params),
+                self.get_ttt_inputs(inputs, self.mini_batch_size, cache_params, lr_scale=lr_scale),
                 mini_batch_size=self.mini_batch_size,
                 last_mini_batch_params_dict=last_mini_batch_params_dict,
                 cache_params=cache_params,
@@ -506,7 +533,7 @@ class TTTBase(nn.Module):
                 "X": hidden_states[:, -reminder_len:],
             }
             output_reminder, _ = self.ttt(
-                self.get_ttt_inputs(inputs, reminder_len, cache_params),
+                self.get_ttt_inputs(inputs, reminder_len, cache_params, lr_scale=lr_scale),
                 mini_batch_size=reminder_len,
                 last_mini_batch_params_dict=last_mini_batch_params_dict,
                 cache_params=cache_params,
@@ -553,6 +580,21 @@ class TTTLinear(TTTBase):
         use_dual_form = self.config.use_dual_form
         
         hybrid_ratio = getattr(self.config, 'hybrid_ratio', 1.0)
+        grad_clip = getattr(self.config, 'ttt_grad_clip', 1.0)
+        loss_scale = float(getattr(self.config, "ttt_loss_scale", 1.0))
+        eps = 1e-6
+
+        # Debug: clip ratio per sample (only reliable in eval/no-checkpoint path)
+        clip_ratios = [] if not self.training else None
+
+        # Per-sample effective base LR (used for eta in get_eta via lr_scale).
+        # IMPORTANT: anchoring/regularization scaling is controlled separately via config.
+        lr_scale = getattr(self, "last_lr_scale_per_sample", None)
+        base_lr_t = torch.as_tensor(self.config.ttt_base_lr, device=device, dtype=dtype)
+        if lr_scale is None:
+            eff_base_lr = base_lr_t
+        else:
+            eff_base_lr = base_lr_t * lr_scale.to(device=device, dtype=dtype)
 
         def compute_mini_batch(params_dict, inputs):
             W1_init = params_dict["W1_states"]
@@ -579,8 +621,14 @@ class TTTLinear(TTTBase):
             # Effectively: W = (1 - alpha) * W + alpha * W_init
             reg_lambda = self.config.ttt_reg_lambda
             if reg_lambda > 0.0:
-                # Use base_lr for regularization step size to avoid instability
-                alpha = self.config.ttt_base_lr * reg_lambda
+                # Anchoring step size. Do NOT blindly tie this to lr_scale:
+                # hard subjects may have high entropy -> lr_scale != 1, and scaling anchoring down
+                # makes drift worse. Default: "none" (no scaling).
+                mode = getattr(self.config, "ttt_anchor_scale_mode", "none")
+                if mode == "same" and (lr_scale is not None):
+                    alpha = eff_base_lr.reshape(B, 1, 1, 1) * reg_lambda
+                else:
+                    alpha = base_lr_t * reg_lambda
                 # Apply regularization (pull towards self.W1 / self.b1)
                 W1_init = (1.0 - alpha) * W1_init + alpha * self.W1.unsqueeze(0)
                 b1_init = (1.0 - alpha) * b1_init + alpha * self.b1.unsqueeze(0)
@@ -593,6 +641,21 @@ class TTTLinear(TTTBase):
             ln_weight = self.ttt_norm_weight.reshape(self.num_heads, 1, self.head_dim)
             ln_bias = self.ttt_norm_bias.reshape(self.num_heads, 1, self.head_dim)
             grad_l_wrt_Z1 = ln_fused_l2_bwd(Z1, reconstruction_target, ln_weight, ln_bias)
+
+            # Scale the inner-loop objective to keep gradients in a healthy range.
+            # This helps avoid "always clipped" behavior where clip_ratio becomes 1.0 for all batches.
+            if loss_scale != 1.0:
+                grad_l_wrt_Z1 = grad_l_wrt_Z1 * loss_scale
+
+            # Apply inner-loop gradient clipping (norm-based) to prevent instability
+            # Keep direction while limiting step size; clip per token×head vector.
+            if grad_clip > 0.0:
+                # grad_l_wrt_Z1: [B, H, M, Dh]
+                norm = torch.linalg.vector_norm(grad_l_wrt_Z1, ord=2, dim=-1, keepdim=True)  # [B,H,M,1]
+                scale = (grad_clip / (norm + eps)).clamp(max=1.0)
+                grad_l_wrt_Z1 = grad_l_wrt_Z1 * scale
+                if clip_ratios is not None:
+                    clip_ratios.append((scale < 1.0).float().mean(dim=(1, 2, 3)))  # [B]
 
             if use_dual_form:
                 # Dual form implementation
@@ -649,6 +712,13 @@ class TTTLinear(TTTBase):
 
         XQW_batch = XQW_batch.permute(1, 0, 3, 2, 4)
         XQW_batch = XQW_batch.reshape(B, L, self.width)
+
+        # Store last clip ratio per sample for debugging/analysis
+        if clip_ratios is not None and len(clip_ratios) > 0:
+            self.last_clip_ratio_per_sample = torch.stack(clip_ratios, dim=0).mean(dim=0).detach()
+        else:
+            self.last_clip_ratio_per_sample = None
+
         return XQW_batch, batch_params_dict
 
 class TTTBlock(nn.Module):

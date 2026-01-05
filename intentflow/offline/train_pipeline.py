@@ -109,7 +109,7 @@ def train_and_test(config):
             model_name=model_name,          # Pass model name
             results_dir=result_dir          # Pass directory for saving analysis files
         )
-
+        
         # Count total number of model parameters
         param_count = sum(p.numel() for p in model.parameters())
 
@@ -227,7 +227,7 @@ def run():
     if not os.path.exists(config_path):
         config_path = os.path.join(CONFIG_DIR, f"{args.model}.yaml")
         if not os.path.exists(config_path):
-             pass 
+            raise FileNotFoundError(f"Config not found for model '{args.model}'. Tried: {config_path}")
              
     with open(config_path) as f:    
         config = yaml.safe_load(f)

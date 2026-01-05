@@ -20,6 +20,8 @@ from torch import nn, Tensor
 # Utility Libraries
 from einops import rearrange
 from einops.layers.torch import Rearrange
+import torch.nn.functional as F
+import math
 
 # Local application-specific imports
 from .classification_module import ClassificationModule
@@ -111,6 +113,17 @@ class MultiKernelConvBlock(nn.Module):
                 in_channels=self.d_model,
                 num_groups=n_groups, 
             )
+            # Soft group-attention strength (gamma >= 0 via softplus parameterization)
+            init_gamma = 0.1
+            self.group_attn_scale_raw = nn.Parameter(torch.log(torch.expm1(torch.tensor(init_gamma))))
+        else:
+            self.group_attn_scale_raw = None
+
+        # Debug buffers (populated during forward)
+        self.last_group_attn_weights = None   # [B, G]
+        self.last_conv_norm_pre = None        # [B]
+        self.last_conv_norm_post = None       # [B]
+        self.last_group_attn_gamma = None     # float
         
         self.pool2 = nn.AvgPool2d((1, pool_length_2))
         self.drop2 = nn.Dropout(dropout)
@@ -142,8 +155,27 @@ class MultiKernelConvBlock(nn.Module):
         x = self.temporal_conv_2(x)                      
         
         # Group attention (optional) 
-        if self.use_group_attn:        
-            x = x + self.group_attn(x)   # Residual connection 
+        if self.use_group_attn:
+            # Debug: norm before GA
+            with torch.no_grad():
+                pre = torch.linalg.vector_norm(x.float(), ord=2, dim=(1, 2, 3))
+                self.last_conv_norm_pre = pre.detach()
+
+            ga = self.group_attn(x)
+            gamma = F.softplus(self.group_attn_scale_raw)
+            self.last_group_attn_gamma = float(gamma.detach().cpu().item())
+            x = x + gamma * ga
+
+            # Debug: att weights (if available)
+            w = getattr(self.group_attn, "last_att_weights", None)
+            if w is not None:
+                # [B, G, 1, 1] -> [B, G]
+                self.last_group_attn_weights = w.squeeze(-1).squeeze(-1).detach()
+
+            # Debug: norm after GA
+            with torch.no_grad():
+                post = torch.linalg.vector_norm(x.float(), ord=2, dim=(1, 2, 3))
+                self.last_conv_norm_post = post.detach()
         
         x = self.pool2(x)                                # temporal pooling
         x = self.drop2(x)                                # dropout

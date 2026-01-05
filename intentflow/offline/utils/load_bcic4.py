@@ -19,13 +19,17 @@ def scale(data, factor):
 def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict = None,
               verbose: str = "WARNING", data_path: Optional[str] = None):
     
+    # NOTE:
+    # `dataset` is the dataset code string ("2a" or "2b"). Do NOT overwrite it with a dataset object.
+    dataset_code = dataset
+
     if data_path:
         # Local GDF loading
         datasets = []
         for subject_id in subject_ids:
             subj_str = f"{subject_id:02d}"
             
-            if dataset == "2a":
+            if dataset_code == "2a":
                 # BCIC IV 2a filename convention: A01T.gdf, A01E.gdf, etc.
                 for session_code, suffix in [("session_T", "T"), ("session_E", "E")]:
                     filename = f"A{subj_str}{suffix}.gdf"
@@ -54,10 +58,9 @@ def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict 
                         "session": session_code,
                         "run": session_code
                     })
-                    
                     datasets.append(BaseDataset(raw, description))
                     
-            elif dataset == "2b":
+            elif dataset_code == "2b":
                 # BCIC IV 2b filename convention: B0101T.gdf, B0102T.gdf, ..., B0104E.gdf, B0105E.gdf
                 # Sessions 0,1,2 are Training (T), Sessions 3,4 are Evaluation (E)
                 for session_idx in range(5):  # 0-4
@@ -98,15 +101,15 @@ def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict 
         if not datasets:
             raise FileNotFoundError(f"No valid GDF files found in {data_path} for subjects {subject_ids}")
             
-        dataset = BaseConcatDataset(datasets)
+        dataset_obj = BaseConcatDataset(datasets)
         
     else:
         # Use MOABB if data_path is not provided
-        dataset_name = "BNCI2014001" if dataset == "2a" else "BNCI2014004"
-        dataset = MOABBDataset(dataset_name, subject_ids=subject_ids)
+        dataset_name = "BNCI2014001" if dataset_code == "2a" else "BNCI2014004"
+        dataset_obj = MOABBDataset(dataset_name, subject_ids=subject_ids)
 
     # Preprocessing pipeline
-    n_channels = 22 if dataset == "2a" else 3
+    n_channels = 22 if dataset_code == "2a" else 3
     preprocessors = [
         # Pick EEG channels based on dataset
         # For BCIC IV 2a: first 22 are EEG
@@ -121,11 +124,11 @@ def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict 
         preprocessors.append(Preprocessor("filter", l_freq=l_freq, h_freq=h_freq,
                                           verbose=verbose))
 
-    preprocess(dataset, preprocessors)
+    preprocess(dataset_obj, preprocessors)
 
     # create windows
     # BaseConcatDataset access
-    sfreq = dataset.datasets[0].raw.info["sfreq"]
+    sfreq = dataset_obj.datasets[0].raw.info["sfreq"]
     
     # Define window relative to event
     # 4.0s duration -> 1000 samples at 250Hz
@@ -137,11 +140,11 @@ def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict 
     # BCIC IV 2b: 769=Left Hand, 770=Right Hand (2 classes)
     if verbose:
         descriptions = set()
-        for ds in dataset.datasets:
-             descriptions.update(ds.raw.annotations.description)
+        for ds in dataset_obj.datasets:
+            descriptions.update(ds.raw.annotations.description)
         print("Unique descriptions in annotations:", descriptions)
 
-    if dataset == "2a":
+    if dataset_code == "2a":
         mapping = {
             '769': 0, '770': 1, '771': 2, '772': 3,
         }
@@ -184,7 +187,7 @@ def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict 
     # Braindecode will create windows from trial_start_offset to trial_stop_offset
     # resulting in fixed length windows if offsets are fixed.
     windows_dataset = create_windows_from_events(
-        dataset, 
+        dataset_obj,
         trial_start_offset_samples=trial_start_offset_samples,
         trial_stop_offset_samples=trial_stop_offset_samples, 
         mapping=mapping if data_path else None, 

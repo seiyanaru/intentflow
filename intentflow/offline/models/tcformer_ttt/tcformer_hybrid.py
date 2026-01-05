@@ -4,6 +4,7 @@ from einops import rearrange
 from models.tcformer.tcformer import MultiKernelConvBlock, TCNHead, ClassificationModule
 from models.tcformer.tcformer import _GQAttention, DropPath, _build_rotary_cache 
 from models.tcformer_ttt.ttt_layer import TTTConfig, TTTLinear
+import torch.nn.functional as F
 
 class TTTAdapter(nn.Module):
     """
@@ -44,17 +45,15 @@ class TTTAdapter(nn.Module):
         nn.init.zeros_(self.up_proj.weight)
         nn.init.zeros_(self.up_proj.bias)
 
-    def forward(self, x):
+    def forward(self, x, lr_scale: torch.Tensor | None = None):
         # x: [B, T, D]
-        residual = x
-        
         # 1. 圧縮 (Down-projection)
         x = self.down_proj(x)
         x = self.act(x)
         
         # 2. 適応 (TTT: Test-Time Training)
         # ここで入力データに応じた重み更新が行われる
-        x = self.ttt_layer(x) 
+        x = self.ttt_layer(x, lr_scale=lr_scale)
         
         # 3. 復元 (Up-projection)
         x = self.norm(x)
@@ -62,12 +61,91 @@ class TTTAdapter(nn.Module):
         
         return x
 
+class GatingModule(nn.Module):
+    """
+    Input-dependent dynamic gating mechanism.
+    Computes alpha based on global statistics of the input features.
+    """
+    def __init__(self, input_dim: int, hidden_dim: int = 16, init_bias: float = -4.0):
+        super().__init__()
+        self.in_norm = nn.LayerNorm(input_dim)
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid()
+        )
+        # Initialize bias to output a small value (close to 0) initially
+        nn.init.constant_(self.net[2].bias, init_bias)
+        nn.init.xavier_uniform_(self.net[0].weight)
+        nn.init.xavier_uniform_(self.net[2].weight)
+
+    def forward(self, x, extra: torch.Tensor | None = None):
+        # x: [B, T, D]
+        # Compute global statistics over time (mean + std)
+        x_mean = x.mean(dim=1)                      # [B, D]
+        x_std = x.std(dim=1, unbiased=False)        # [B, D]
+        if extra is None:
+            gate_in = torch.cat([x_mean, x_std], dim=-1)  # [B, 2D]
+        else:
+            # extra: [B, 1] (e.g., attention-path variability proxy)
+            gate_in = torch.cat([x_mean, x_std, extra], dim=-1)  # [B, 2D+1]
+        gate_in = self.in_norm(gate_in)
+        gate = self.net(gate_in) # [B, 1]
+        return gate.unsqueeze(1) # [B, 1, 1] for broadcasting
+
+
+class EntropyGating(nn.Module):
+    """
+    Entropy-driven gating: alpha = sigmoid(w * H + b).
+    This is deliberately simple and *reactive*: it uses model uncertainty rather than feature statistics.
+    """
+    def __init__(
+        self,
+        init_w: float = 2.0,
+        init_b: float = -3.0,
+        threshold: float = 0.0,
+        max_out: float = 1.0,
+        hard_off_below_threshold: bool = True,
+    ):
+        super().__init__()
+        self.w = nn.Parameter(torch.tensor(float(init_w)))
+        self.b = nn.Parameter(torch.tensor(float(init_b)))
+        self.register_buffer("threshold", torch.tensor(float(threshold)), persistent=False)
+        self.register_buffer("max_out", torch.tensor(float(max_out)), persistent=False)
+        self.hard_off_below_threshold = bool(hard_off_below_threshold)
+
+    def forward(self, entropy_1d: torch.Tensor) -> torch.Tensor:
+        # entropy_1d: [B]
+        # Dead-zone: below threshold, force 0 (protect stable subjects like S1/S5).
+        thr = self.threshold.to(device=entropy_1d.device, dtype=entropy_1d.dtype)
+        h = entropy_1d - thr
+        if self.hard_off_below_threshold:
+            mask = (h > 0).to(entropy_1d.dtype)
+            h = torch.clamp(h, min=0.0)
+        else:
+            mask = 1.0
+
+        z = self.w * h + self.b
+        out = torch.sigmoid(z) * mask
+        max_out = self.max_out.to(device=entropy_1d.device, dtype=entropy_1d.dtype)
+        return out * max_out  # [B]
+
 class HybridBlock(nn.Module):
     """
     Attention (Fixed) + TTT Adapter (Adaptive) の並列ハイブリッドブロック
     """
-    def __init__(self, d_model: int, q_heads: int, kv_heads: int, 
-                 ttt_config: TTTConfig, adapter_ratio=0.25, dropout=0.4, drop_path_rate=0.0):
+    def __init__(
+        self,
+        d_model: int,
+        q_heads: int,
+        kv_heads: int,
+        ttt_config: TTTConfig,
+        adapter_ratio=0.25,
+        dropout=0.4,
+        drop_path_rate=0.0,
+        use_dynamic_gating=False,
+    ):
         super().__init__()
         self.norm1 = nn.LayerNorm(d_model)
         
@@ -79,9 +157,17 @@ class HybridBlock(nn.Module):
         adapter_dim = int(d_model * adapter_ratio)
         self.ttt_adapter = TTTAdapter(ttt_config, d_model, adapter_dim)
         
-        # Gating parameter (学習可能な係数 alpha)
-        # 初期値0.0 -> 学習が進むにつれてTTTを信頼するようになる
+        # Gating Mechanism
+        self.use_dynamic_gating = use_dynamic_gating
+        if self.use_dynamic_gating:
+            # mean(x) + std(x) + attn_std proxy
+            self.gate = GatingModule(input_dim=2 * d_model + 1)
+        # Always define static scale for compatibility (used only when dynamic gating is off)
         self.adapter_scale = nn.Parameter(torch.tensor(0.0))
+
+        # Debug: last alpha per sample (set in forward)
+        self.last_alpha = None
+
         self.drop_path = DropPath(drop_path_rate)
         self.norm2 = nn.LayerNorm(d_model)
         
@@ -93,7 +179,7 @@ class HybridBlock(nn.Module):
             nn.Dropout(dropout),
         )
 
-    def forward(self, x, cos, sin):
+    def forward(self, x, cos, sin, gate_alpha: torch.Tensor | None = None, enable_ttt: bool = True, lr_scale: torch.Tensor | None = None):
         # Pre-Norm
         normed_x = self.norm1(x)
         
@@ -104,13 +190,33 @@ class HybridBlock(nn.Module):
         out_attn = self.attn(normed_x, cos, sin)
         
         # 2. Adapter Path: TTT (Adaptation)
-        # その場のデータで適応した補正値を計算
-        out_ttt = self.ttt_adapter(normed_x)
+        # IMPORTANT: when enable_ttt=False (reactive 1st pass), do NOT run TTT at all.
+        # TTT layers can update internal state; even alpha=0 would still adapt if we executed the adapter.
+        if enable_ttt:
+            out_ttt = self.ttt_adapter(normed_x, lr_scale=lr_scale)
+        else:
+            out_ttt = None
         
         # Integration (統合)
         # X_new = X + Attention(X) + alpha * TTT(X)
-        # alpha (adapter_scale) がTTTの影響度を制御する
-        x = x + self.drop_path(out_attn + self.adapter_scale * out_ttt)
+        if not enable_ttt:
+            # Attention-only pass (for entropy computation)
+            self.last_alpha = torch.zeros(x.shape[0], device=x.device)
+            x = x + self.drop_path(out_attn)
+        else:
+            # Adaptation pass
+            if gate_alpha is not None:
+                # gate_alpha: [B,1,1]
+                alpha = gate_alpha
+            elif self.use_dynamic_gating:
+                # Legacy: feature-statistics gating (kept for compatibility)
+                attn_std = out_attn.std(dim=1, unbiased=False).mean(dim=-1, keepdim=True)  # [B,1]
+                alpha = self.gate(x, extra=attn_std)  # [B,1,1]
+            else:
+                alpha = self.adapter_scale.view(1, 1, 1)
+
+            self.last_alpha = alpha.squeeze(-1).squeeze(-1).detach()  # [B]
+            x = x + self.drop_path(out_attn + alpha * out_ttt)
         
         # MLP Block
         x = x + self.drop_path(self.mlp(self.norm2(x)))
@@ -118,7 +224,7 @@ class HybridBlock(nn.Module):
         return x
 
 class HybridEncoder(nn.Module):
-    def __init__(self, d_model, trans_depth, q_heads, kv_heads, ttt_config, adapter_ratio=0.25, drop_path_max=0.25):
+    def __init__(self, d_model, trans_depth, q_heads, kv_heads, ttt_config, adapter_ratio=0.25, drop_path_max=0.25, use_dynamic_gating=False):
         super().__init__()
         self.d_model = d_model
         
@@ -136,7 +242,8 @@ class HybridEncoder(nn.Module):
                 kv_heads=kv_heads,
                 ttt_config=ttt_config,
                 adapter_ratio=adapter_ratio, 
-                drop_path_rate=dpr[i]
+                drop_path_rate=dpr[i],
+                use_dynamic_gating=use_dynamic_gating
             )
             for i in range(trans_depth)
         ])
@@ -147,13 +254,21 @@ class HybridEncoder(nn.Module):
             self._cos, self._sin = cos.to(device), sin.to(device)
         return self._cos, self._sin
 
-    def forward(self, x):
+    def forward(self, x, gate_alpha: torch.Tensor | None = None, enable_ttt: bool = True, lr_scale: torch.Tensor | None = None):
         # x: [B, T, D]
         seq_len = x.shape[1]
         cos, sin = self._rotary_cache(seq_len, x.device)
-        
+
+        alphas = []
         for layer in self.layers:
-            x = layer(x, cos[:seq_len], sin[:seq_len])
+            x = layer(x, cos[:seq_len], sin[:seq_len], gate_alpha=gate_alpha, enable_ttt=enable_ttt, lr_scale=lr_scale)
+            if getattr(layer, "last_alpha", None) is not None:
+                alphas.append(layer.last_alpha)
+        # Debug: mean alpha across layers (per sample)
+        if alphas:
+            self.last_alpha = torch.stack(alphas, dim=0).mean(dim=0).detach()
+        else:
+            self.last_alpha = None
         return x
 
 class TCFormerHybridModule(nn.Module):
@@ -174,6 +289,17 @@ class TCFormerHybridModule(nn.Module):
         kv_heads=4,
         trans_depth=2,
         adapter_ratio=0.25,
+        use_dynamic_gating=False,
+        use_group_attn=True,
+        gating_mode: str = "feature_stats",  # "feature_stats" | "entropy"
+        entropy_alpha_init_w: float = 2.0,
+        entropy_alpha_init_b: float = -3.0,
+        entropy_lr_init_w: float = 2.0,
+        entropy_lr_init_b: float = -2.0,
+        entropy_threshold: float = 0.95,
+        alpha_max: float = 0.5,
+        lr_scale_max: float = 0.5,
+        entropy_gating_in_train: bool = False,
     ):
         super().__init__()
         
@@ -187,7 +313,8 @@ class TCFormerHybridModule(nn.Module):
             pool_length_2=pool_length_2, 
             dropout=dropout_conv,
             d_group=d_group,
-            use_group_attn=False 
+            # IMPORTANT: respect config; this can materially affect left/right separation
+            use_group_attn=use_group_attn,
         )
         
         # Calculate feature dimensions
@@ -207,7 +334,10 @@ class TCFormerHybridModule(nn.Module):
             mini_batch_size=ttt_config.get("mini_batch_size", 16),
             use_dual_form=True, # 高速化のため必須
             learnable_init_state=ttt_config.get("learnable_init_state", False),
-            ttt_reg_lambda=ttt_config.get("ttt_reg_lambda", 0.01) # 正則化
+            ttt_reg_lambda=ttt_config.get("ttt_reg_lambda", 0.01), # 正則化
+            ttt_anchor_scale_mode=ttt_config.get("ttt_anchor_scale_mode", "none"),
+            ttt_loss_scale=ttt_config.get("ttt_loss_scale", 1.0),
+            ttt_grad_clip=ttt_config.get("ttt_grad_clip", 1.0) # Gradient clipping
         )
         
         self.hybrid_encoder = HybridEncoder(
@@ -216,7 +346,8 @@ class TCFormerHybridModule(nn.Module):
             q_heads=q_heads,
             kv_heads=kv_heads,
             ttt_config=self.ttt_cfg,
-            adapter_ratio=adapter_ratio
+            adapter_ratio=adapter_ratio,
+            use_dynamic_gating=use_dynamic_gating
         )
         # 3. TCN Head (Classification - 共通)
         self.tcn_head = TCNHead(
@@ -228,6 +359,34 @@ class TCFormerHybridModule(nn.Module):
             n_classes=n_classes
         )
 
+        # ── Reactive (entropy-driven) gating knobs ──────────────────────────────
+        self.use_dynamic_gating = use_dynamic_gating
+        self.gating_mode = gating_mode
+        self.entropy_gating_in_train = entropy_gating_in_train
+        if self.use_dynamic_gating and self.gating_mode == "entropy":
+            # alpha gate and lr_scale gate are separated for flexibility
+            self.entropy_alpha_gate = EntropyGating(
+                init_w=entropy_alpha_init_w,
+                init_b=entropy_alpha_init_b,
+                threshold=entropy_threshold,
+                max_out=alpha_max,
+                hard_off_below_threshold=True,
+            )
+            self.entropy_lr_gate = EntropyGating(
+                init_w=entropy_lr_init_w,
+                init_b=entropy_lr_init_b,
+                threshold=entropy_threshold,
+                max_out=lr_scale_max,
+                hard_off_below_threshold=True,
+            )
+        else:
+            self.entropy_alpha_gate = None
+            self.entropy_lr_gate = None
+
+        # Debug buffers for reactive gating
+        self.last_gate_entropy = None   # [B]
+        self.last_ttt_lr_scale = None   # [B]
+
     def forward(self, x):
         # Input: [B, C, T] or [B, 1, C, T]
         if x.ndim == 4: x = x.squeeze(1) 
@@ -237,12 +396,79 @@ class TCFormerHybridModule(nn.Module):
         
         # 2. Sequence Learning (Hybrid)
         x = x.permute(0, 2, 1) # [B, D, T] -> [B, T, D]
-        x = self.hybrid_encoder(x) 
+
+        # ── Strategy A/B: entropy-driven reactive adaptation (2-pass) ──────────
+        # By default, run this ONLY in eval/inference.
+        # Running 2-pass entropy gating during training doubles compute and adds noise (dropout),
+        # often harming stability. Enable explicitly via entropy_gating_in_train=True.
+        if self.use_dynamic_gating and self.gating_mode == "entropy" and (self.entropy_gating_in_train or (not self.training)):
+            # Pass 1: Attention-only (NO TTT) to get provisional logits -> entropy
+            x_main = self.hybrid_encoder(x, enable_ttt=False)
+            x_main_t = x_main.permute(0, 2, 1)  # [B,T,D] -> [B,D,T]
+            with torch.no_grad():
+                logits_main = self.tcn_head(x_main_t)  # [B, n_classes]
+                p = torch.softmax(logits_main, dim=-1).clamp_min(1e-12)
+                gate_entropy = -(p * p.log()).sum(dim=-1)  # [B]
+
+            # Compute alpha and lr_scale from entropy
+            alpha_1d = self.entropy_alpha_gate(gate_entropy)  # [B]
+            lr_scale = self.entropy_lr_gate(gate_entropy)     # [B]
+
+            # Debug buffers
+            self.last_gate_entropy = gate_entropy.detach()
+            self.last_ttt_lr_scale = lr_scale.detach()
+
+            # Pass 2: Run full hybrid with externally supplied alpha and lr_scale
+            gate_alpha = alpha_1d.view(-1, 1, 1)
+            x = self.hybrid_encoder(x, gate_alpha=gate_alpha, enable_ttt=True, lr_scale=lr_scale)
+        else:
+            # Legacy path (feature-stats gating or static scale)
+            self.last_gate_entropy = None
+            self.last_ttt_lr_scale = None
+            x = self.hybrid_encoder(x)
+
         x = x.permute(0, 2, 1) # [B, T, D] -> [B, D, T]
-        
+
         # 3. Classification
-        x = self.tcn_head(x)
-        return x
+        logits = self.tcn_head(x)
+        return logits
+
+    def get_debug_batch(self):
+        """
+        Return latest per-batch debug tensors (if available).
+        This is used by ClassificationModule.test_step to save small json stats.
+        """
+        dbg = {
+            "alpha": getattr(self.hybrid_encoder, "last_alpha", None),
+            "gate_entropy": getattr(self, "last_gate_entropy", None),
+            "ttt_lr_scale": getattr(self, "last_ttt_lr_scale", None),
+            "clip_ratio": None,
+            "group_attn_weights": getattr(self.conv_block, "last_group_attn_weights", None),
+            "conv_norm_pre": getattr(self.conv_block, "last_conv_norm_pre", None),
+            "conv_norm_post": getattr(self.conv_block, "last_conv_norm_post", None),
+            "group_attn_gamma": getattr(self.conv_block, "last_group_attn_gamma", None),
+            "group_attn_temperature": getattr(getattr(self.conv_block, "group_attn", None), "last_temperature", None),
+        }
+
+        # Clip ratio: average across layers (if available)
+        ratios = []
+        eff_lrs = []
+        for layer in getattr(self.hybrid_encoder, "layers", []):
+            try:
+                ttt_layer = layer.ttt_adapter.ttt_layer
+                r = getattr(ttt_layer, "last_clip_ratio_per_sample", None)
+                if r is not None:
+                    ratios.append(r)
+                elr = getattr(ttt_layer, "last_effective_base_lr_per_sample", None)
+                if elr is not None:
+                    eff_lrs.append(elr)
+            except Exception:
+                continue
+        if ratios:
+            dbg["clip_ratio"] = torch.stack(ratios, dim=0).mean(dim=0).detach()
+        if eff_lrs:
+            dbg["ttt_effective_base_lr"] = torch.stack(eff_lrs, dim=0).mean(dim=0).detach()
+        return dbg
 
 class TCFormerHybrid(ClassificationModule):
     def __init__(self, n_classes, **kwargs):
@@ -257,7 +483,18 @@ class TCFormerHybrid(ClassificationModule):
             trans_depth=kwargs.get("trans_depth", 2),
             q_heads=kwargs.get("q_heads", 4),
             kv_heads=kwargs.get("kv_heads", 4),
-            adapter_ratio=kwargs.get("adapter_ratio", 0.25)
+            adapter_ratio=kwargs.get("adapter_ratio", 0.25),
+            use_group_attn=kwargs.get("use_group_attn", True),
+            use_dynamic_gating=kwargs.get("use_dynamic_gating", False),
+            gating_mode=kwargs.get("gating_mode", "feature_stats"),
+            entropy_alpha_init_w=kwargs.get("entropy_alpha_init_w", 2.0),
+            entropy_alpha_init_b=kwargs.get("entropy_alpha_init_b", -3.0),
+            entropy_lr_init_w=kwargs.get("entropy_lr_init_w", 2.0),
+            entropy_lr_init_b=kwargs.get("entropy_lr_init_b", -2.0),
+            entropy_threshold=kwargs.get("entropy_threshold", 0.95),
+            alpha_max=kwargs.get("alpha_max", 0.5),
+            lr_scale_max=kwargs.get("lr_scale_max", 0.5),
+            entropy_gating_in_train=kwargs.get("entropy_gating_in_train", False),
         )
         super().__init__(model=model, n_classes=n_classes, **kwargs)
 

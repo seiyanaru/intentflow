@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 class ChannelGroupAttention(nn.Module):
     """
@@ -12,7 +13,7 @@ class ChannelGroupAttention(nn.Module):
         in_channels (int): Number of input channels (C). Must be divisible by num_groups.
         num_groups (int): Number of groups (G) to divide channels into.
     """
-    def __init__(self, in_channels, num_groups, reduction=4):
+    def __init__(self, in_channels, num_groups, reduction=4, temperature_init: float = 0.5):
         
         super().__init__()
 
@@ -37,10 +38,23 @@ class ChannelGroupAttention(nn.Module):
         # Project to 1 value per group (using grouped conv!)
         # Using Conv2d with kernel size 1 acts like a Linear layer on (B, G, 1, 1) tensors
         # For (B, G, 1, 1) tensors, nn.Conv2d(C, G, kernel_size=1) is equivalent to nn.Linear(C, G)
-        self.att_fc1 = nn.Conv2d(in_channels, in_channels // reduction, kernel_size=1, groups=num_groups, bias=False)
-        self.att_fc2 = nn.Conv2d(in_channels // reduction, num_groups, kernel_size=1, groups=num_groups, bias=False)
+        self.att_fc1 = nn.Conv2d(in_channels, in_channels // reduction, kernel_size=1, groups=num_groups, bias=True)
+        # Bias helps escape the "always ~0" logits regime; we then use softmax for competition across groups.
+        self.att_fc2 = nn.Conv2d(in_channels // reduction, num_groups, kernel_size=1, groups=num_groups, bias=True)
         self.relu = nn.ReLU()           
-        self.sigmoid = nn.Sigmoid()
+        self.softmax = nn.Softmax(dim=1)
+        # Temperature for sharpening group competition. Constrained to (0, 1) via sigmoid.
+        # Smaller temperature => sharper distribution.
+        self._temp_logit = nn.Parameter(torch.tensor(0.0))  # sigmoid(0)=0.5
+        # If caller provides a different init, set logit accordingly.
+        if temperature_init is not None:
+            t = float(temperature_init)
+            # clamp to open interval for numerical stability
+            t = max(1e-4, min(1.0 - 1e-4, t))
+            self._temp_logit.data.fill_(math.log(t / (1.0 - t)))
+
+        # Debug: latest temperature (scalar float)
+        self.last_temperature = None
 
     def forward(self, x):
         """
@@ -61,10 +75,16 @@ class ChannelGroupAttention(nn.Module):
 
         # 2. Compress to per-group attention: [B, num_groups, 1, 1]
         group_att = self.att_fc1(pooled) # [B, C/r, 1, 1] grouped 1×1 conv
-        att_weights = self.att_fc2(self.relu(group_att)) # [B, G, 1, 1] grouped 1×1 conv
+        att_logits = self.att_fc2(self.relu(group_att)) # [B, G, 1, 1] grouped 1×1 conv
           
-        # 3. Apply sigmoid to get attention values
-        att_weights = self.sigmoid(att_weights)
+        # 3. Temperature-scaled softmax over groups to get a distribution (sums to 1 across G)
+        # temp in (0,1): divide logits by temp => sharpen
+        temp = torch.sigmoid(self._temp_logit).clamp_min(1e-4)
+        self.last_temperature = float(temp.detach().cpu().item())
+        att_weights = self.softmax(att_logits / temp)
+        # Debug hook: keep latest attention weights per batch
+        # Shape: [B, G, 1, 1]
+        self.last_att_weights = att_weights.detach()
 
         # 4. Apply attention
         # Efficient expansion using view (instead of repeat_interleave)

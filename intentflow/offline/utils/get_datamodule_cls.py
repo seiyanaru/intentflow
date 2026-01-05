@@ -1,5 +1,7 @@
-from datamodules import BCICIII_IVa, BCICIII_IVaLOSO, BCICIV2a, BCICIV2aTVT,\
+from datamodules import (
+    BCICIII_IVa, BCICIII_IVaLOSO, BCICIV2a, BCICIV2aTVT,
     BCICIV2aLOSO, BCICIV2b, BCICIV2bLOSO, HighGamma, HighGammaLOSO, REH_MI
+)
 
 
 def get_datamodule_cls(dataset_name):

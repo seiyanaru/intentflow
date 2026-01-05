@@ -87,16 +87,42 @@ model_kwargs:
   # TTT Specific Configuration
   ttt_config:
     layer_type: "linear"
-    base_lr: 1.0
+    # Lower base_lr to avoid overly aggressive adaptation.
+    base_lr: 0.1
     mini_batch_size: 16
     share_qk: false
     use_dual_form: true
     learnable_init_state: false
-  
+    # Stronger anchoring to prevent drift on hard subjects (S2) and protect stable ones (S1/S5).
+    ttt_reg_lambda: 0.05
+    # Do not scale anchoring by lr_scale (keeps stability when entropy is high).
+    ttt_anchor_scale_mode: "none"
+    # Scale inner-loop gradients to avoid "always clipped" saturation.
+    ttt_loss_scale: 0.1
+    ttt_grad_clip: 1.0     # Gradient clipping threshold for TTT updates
+
   # Hybrid Learning Configuration (Optimal parameters from grid search)
   hybrid_config:
     lr: 0.1              # Learning rate for hybrid learning
     reg: 0.05            # L2 regularization coefficient
     ratio: 0.25          # Ratio of data used for hybrid learning (25%)
+  
+  # Dynamic Gating Configuration
+  use_dynamic_gating: True  # Toggle for input-dependent gating mechanism
+  gating_mode: "entropy"    # "feature_stats" | "entropy"
+  # Entropy-driven reactive adaptation: alpha/lr_scale = sigmoid(w * H + b)
+  entropy_alpha_init_w: 2.0
+  entropy_alpha_init_b: -3.0
+  entropy_lr_init_w: 2.0
+  entropy_lr_init_b: -2.0
+  entropy_gating_in_train: False   # run 2-pass entropy gating only in eval by default
+  # Dead-zone + caps (protect S1/S5 from unnecessary adaptation)
+  entropy_threshold: 0.95
+  alpha_max: 0.5
+  lr_scale_max: 0.5
+
+  # Optional: encourage group-attn to be selective (minimize entropy of group weights)
+  # Set to 0.0 to disable.
+  group_attn_entropy_reg: 0.0
 
 save_checkpoint: True
