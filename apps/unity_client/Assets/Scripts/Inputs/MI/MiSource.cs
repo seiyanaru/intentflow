@@ -346,9 +346,8 @@ namespace IntentFlow.Inputs.MI
             _socket = new System.Net.WebSockets.ClientWebSocket();
             _cts = new System.Threading.CancellationTokenSource();
             
-            // Set proper WebSocket headers
-            _socket.Options.SetRequestHeader("Connection", "Upgrade");
-            _socket.Options.SetRequestHeader("Upgrade", "websocket");
+            // Note: Connection and Upgrade headers are set automatically by ClientWebSocket
+            // Do NOT set them manually as it causes conflicts
             
             System.Threading.Tasks.Task connectTask = null;
             try
@@ -377,7 +376,13 @@ namespace IntentFlow.Inputs.MI
             
             if (connectTask.IsFaulted)
             {
-                OnError?.Invoke(connectTask.Exception?.InnerException?.Message ?? "Connection failed");
+                var ex = connectTask.Exception?.InnerException ?? connectTask.Exception;
+                var fullError = $"{ex?.GetType().Name}: {ex?.Message}";
+                if (ex?.InnerException != null)
+                {
+                    fullError += $" -> {ex.InnerException.GetType().Name}: {ex.InnerException.Message}";
+                }
+                OnError?.Invoke(fullError);
                 yield break;
             }
             

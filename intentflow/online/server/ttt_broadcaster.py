@@ -263,7 +263,7 @@ async def run_websocket_server(broadcaster: TTTBroadcaster, host: str, port: int
         print("Error: websockets library not installed. Run: pip install websockets")
         return
     
-    async def handler(websocket, path):
+    async def handler(websocket):
         """Handle incoming WebSocket connections."""
         broadcaster.clients.add(websocket)
         print(f"[Server] Client connected ({len(broadcaster.clients)} total)")
@@ -288,7 +288,16 @@ async def run_websocket_server(broadcaster: TTTBroadcaster, host: str, port: int
             print(f"[Server] Client disconnected ({len(broadcaster.clients)} remaining)")
     
     print(f"[Server] Starting WebSocket server on ws://{host}:{port}")
-    async with websockets.serve(handler, host, port):
+    # origins=None disables origin checking for compatibility with Unity
+    # ping_interval=None disables automatic ping to avoid connection issues
+    async with websockets.serve(
+        handler, 
+        host, 
+        port,
+        origins=None,
+        ping_interval=None,
+        ping_timeout=None,
+    ):
         await asyncio.Future()  # Run forever
 
 
