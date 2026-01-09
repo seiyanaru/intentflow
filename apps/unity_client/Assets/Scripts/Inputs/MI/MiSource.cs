@@ -153,13 +153,21 @@ namespace IntentFlow.Inputs.MI
         
         private void HandleMessage(string message)
         {
+            if (logMessages)
+            {
+                Debug.Log($"[MiSource] Raw message: {message}");
+            }
+            
             try
             {
                 var intent = JsonUtility.FromJson<IntentMessage>(message);
                 
                 if (intent == null || intent.type != "intent")
                 {
-                    // Ignore non-intent messages (welcome, pong, etc.)
+                    if (logMessages)
+                    {
+                        Debug.Log($"[MiSource] Ignored non-intent message: type={intent?.type}");
+                    }
                     return;
                 }
                 

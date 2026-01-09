@@ -9,10 +9,19 @@ namespace Tasks.Runner3Lane.Core
         [SerializeField] private float spawnZOffset = 30f;
         [SerializeField] private float spawnInterval = 1.2f;
         [SerializeField] private float lifetime = 10f;
+        [SerializeField] private bool activeOnStart = true;
 
         private float _timer;
 
         public bool Active { get; set; }
+
+        private void Start()
+        {
+            if (activeOnStart)
+            {
+                Active = true;
+            }
+        }
 
         public float SpawnInterval
         {
