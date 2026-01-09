@@ -144,14 +144,14 @@ def plot_entropy_for_subject(data_dir, save_dir, subject_id):
         ent = calc_entropy(logits)
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=FutureWarning)
-            sns.kdeplot(ent, color=color, label=disp_name, fill=True, alpha=0.3)
+        sns.kdeplot(ent, color=color, label=disp_name, fill=True, alpha=0.3)
         
     plt.xlabel('Prediction Entropy')
     plt.ylabel('Density')
     plt.title(f"Entropy Distribution (S{subject_id})")
     handles, labels = plt.gca().get_legend_handles_labels()
     if handles:
-        plt.legend()
+    plt.legend()
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, f"entropy_subj{subject_id}_comparison.png"))
     plt.close()
@@ -211,7 +211,7 @@ def plot_learning_curve_for_subject(data_dir, save_dir, subject_id):
     plt.title(f"Learning Curve (S{subject_id})")
     handles, labels = plt.gca().get_legend_handles_labels()
     if handles:
-        plt.legend()
+    plt.legend()
     plt.ylim(0, 1.05)
     plt.tight_layout()
     plt.savefig(os.path.join(save_dir, f"learning_curve_subj{subject_id}_comparison.png"))
@@ -229,7 +229,7 @@ def plot_acc_comparison_bar(data_dir, save_dir):
     colors = [m[2] for m in models]
     for model_name, _, _ in models:
         acc_data = load_final_acc(data_dir, model_name)
-        all_accs.append([acc_data.get(f"Subject_{i}", 0) * 100 for i in range(1, 10)])
+            all_accs.append([acc_data.get(f"Subject_{i}", 0) * 100 for i in range(1, 10)])
             
     x = np.arange(len(subjects))
     width = 0.8 / max(1, len(models))

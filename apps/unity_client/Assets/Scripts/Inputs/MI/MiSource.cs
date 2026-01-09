@@ -1,16 +1,223 @@
+using System;
+using System.Collections;
 using UnityEngine;
 using IntentFlow.Inputs;
-using IntentFlow;
 
 namespace IntentFlow.Inputs.MI
 {
+    /// <summary>
+    /// Motor Imagery input source that connects to the Python TTT Broadcaster
+    /// via WebSocket and receives prediction intents.
+    /// </summary>
     public class MiSource : MonoBehaviour, IIntentSource
     {
-        [Tooltip("IntentFlow websocket client (optional placeholder)")]
-        public IntentFlowClient client;
-
+        [Header("WebSocket Settings")]
+        [SerializeField] private string serverUrl = "ws://localhost:8765";
+        [SerializeField] private bool autoConnect = true;
+        [SerializeField] private float reconnectInterval = 3.0f;
+        
+        [Header("Debug")]
+        [SerializeField] private bool logMessages = true;
+        
+        /// <summary>Event fired when an intent is received from the server.</summary>
+        public event Action<IntentSignal> IntentReceived;
+        
+        /// <summary>Event fired when connection state changes.</summary>
+        public event Action<bool> ConnectionStateChanged;
+        
+        /// <summary>Current connection state.</summary>
+        public bool IsConnected { get; private set; }
+        
+        /// <summary>Last received confidence value.</summary>
+        public float LastConfidence { get; private set; }
+        
+        /// <summary>Last received intent type.</summary>
+        public IntentType LastIntentType { get; private set; }
+        
         private IntentSignal? _pending;
-
+        private WebSocketClient _wsClient;
+        private bool _shouldReconnect = true;
+        
+        private void Awake()
+        {
+            _wsClient = new WebSocketClient();
+            _wsClient.OnMessage += HandleMessage;
+            _wsClient.OnOpen += HandleOpen;
+            _wsClient.OnClose += HandleClose;
+            _wsClient.OnError += HandleError;
+        }
+        
+        private void Start()
+        {
+            if (autoConnect)
+            {
+                Connect();
+            }
+        }
+        
+        private void OnDestroy()
+        {
+            _shouldReconnect = false;
+            Disconnect();
+            
+            if (_wsClient != null)
+            {
+                _wsClient.OnMessage -= HandleMessage;
+                _wsClient.OnOpen -= HandleOpen;
+                _wsClient.OnClose -= HandleClose;
+                _wsClient.OnError -= HandleError;
+            }
+        }
+        
+        private void Update()
+        {
+            // Process WebSocket messages on main thread
+            _wsClient?.DispatchMessageQueue();
+        }
+        
+        /// <summary>Connect to the WebSocket server.</summary>
+        public void Connect()
+        {
+            if (IsConnected) return;
+            
+            _shouldReconnect = true;
+            StartCoroutine(ConnectCoroutine());
+        }
+        
+        /// <summary>Disconnect from the WebSocket server.</summary>
+        public void Disconnect()
+        {
+            _shouldReconnect = false;
+            _wsClient?.Close();
+        }
+        
+        private IEnumerator ConnectCoroutine()
+        {
+            if (logMessages)
+            {
+                Debug.Log($"[MiSource] Connecting to {serverUrl}...");
+            }
+            
+            yield return _wsClient.Connect(serverUrl);
+        }
+        
+        private void HandleOpen()
+        {
+            IsConnected = true;
+            ConnectionStateChanged?.Invoke(true);
+            
+            if (logMessages)
+            {
+                Debug.Log("[MiSource] Connected to TTT Broadcaster");
+            }
+        }
+        
+        private void HandleClose()
+        {
+            IsConnected = false;
+            ConnectionStateChanged?.Invoke(false);
+            
+            if (logMessages)
+            {
+                Debug.Log("[MiSource] Disconnected from server");
+            }
+            
+            // Auto-reconnect
+            if (_shouldReconnect)
+            {
+                StartCoroutine(ReconnectCoroutine());
+            }
+        }
+        
+        private void HandleError(string error)
+        {
+            if (logMessages)
+            {
+                Debug.LogError($"[MiSource] WebSocket error: {error}");
+            }
+        }
+        
+        private IEnumerator ReconnectCoroutine()
+        {
+            yield return new WaitForSeconds(reconnectInterval);
+            
+            if (_shouldReconnect && !IsConnected)
+            {
+                if (logMessages)
+                {
+                    Debug.Log("[MiSource] Attempting to reconnect...");
+                }
+                Connect();
+            }
+        }
+        
+        private void HandleMessage(string message)
+        {
+            try
+            {
+                var intent = JsonUtility.FromJson<IntentMessage>(message);
+                
+                if (intent == null || intent.type != "intent")
+                {
+                    // Ignore non-intent messages (welcome, pong, etc.)
+                    return;
+                }
+                
+                // Map intent string to IntentType enum
+                IntentType intentType = intent.intent.ToLowerInvariant() switch
+                {
+                    "left" => IntentType.Left,
+                    "right" => IntentType.Right,
+                    _ => IntentType.Idle
+                };
+                
+                // Skip idle intents (we only care about left/right for lane control)
+                if (intentType == IntentType.Idle)
+                {
+                    return;
+                }
+                
+                var signal = new IntentSignal
+                {
+                    Type = intentType,
+                    Confidence = intent.conf,
+                    Timestamp = intent.ts,
+                };
+                
+                _pending = signal;
+                LastConfidence = intent.conf;
+                LastIntentType = intentType;
+                
+                IntentReceived?.Invoke(signal);
+                
+                if (logMessages)
+                {
+                    Debug.Log($"[MiSource] Received: {intentType} (conf={intent.conf:F2})");
+                }
+            }
+            catch (Exception e)
+            {
+                if (logMessages)
+                {
+                    Debug.LogWarning($"[MiSource] Failed to parse message: {e.Message}");
+                }
+            }
+        }
+        
+        public bool TryRead(out IntentSignal signal)
+        {
+            if (_pending.HasValue)
+            {
+                signal = _pending.Value;
+                _pending = null;
+                return true;
+            }
+            
+            signal = default;
+            return false;
+        }
+        
+        // Debug methods for testing
         [ContextMenu("Debug Left")]
         public void DebugLeft() => _pending = new IntentSignal
         {
@@ -26,18 +233,191 @@ namespace IntentFlow.Inputs.MI
             Confidence = 0.9f,
             Timestamp = Time.time,
         };
-
-        public bool TryRead(out IntentSignal signal)
+        
+        /// <summary>Intent message from Python server.</summary>
+        [Serializable]
+        private class IntentMessage
         {
-            if (_pending.HasValue)
+            public string type;
+            public string intent;
+            public float conf;
+            public float ts;
+            public int protocol_version;
+        }
+    }
+    
+    /// <summary>
+    /// Simple WebSocket client wrapper for Unity.
+    /// Uses Unity's built-in WebSocket support where available,
+    /// or provides a fallback implementation.
+    /// </summary>
+    public class WebSocketClient
+    {
+        public event Action OnOpen;
+        public event Action OnClose;
+        public event Action<string> OnMessage;
+        public event Action<string> OnError;
+        
+        private System.Collections.Generic.Queue<string> _messageQueue = new();
+        private object _lock = new object();
+        
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // WebGL implementation using JavaScript interop
+        [System.Runtime.InteropServices.DllImport("__Internal")]
+        private static extern int WebSocket_Create(string url);
+        [System.Runtime.InteropServices.DllImport("__Internal")]
+        private static extern void WebSocket_Close(int id);
+        [System.Runtime.InteropServices.DllImport("__Internal")]
+        private static extern void WebSocket_Send(int id, string message);
+        
+        private int _socketId = -1;
+        
+        public IEnumerator Connect(string url)
+        {
+            _socketId = WebSocket_Create(url);
+            yield return new WaitForSeconds(0.5f);
+            OnOpen?.Invoke();
+        }
+        
+        public void Close()
+        {
+            if (_socketId >= 0)
             {
-                signal = _pending.Value;
-                _pending = null;
-                return true;
+                WebSocket_Close(_socketId);
+                _socketId = -1;
             }
-
-            signal = default;
-            return false;
+            OnClose?.Invoke();
+        }
+        
+        public void Send(string message)
+        {
+            if (_socketId >= 0)
+            {
+                WebSocket_Send(_socketId, message);
+            }
+        }
+#else
+        // Standalone/Editor implementation using System.Net.WebSockets
+        private System.Net.WebSockets.ClientWebSocket _socket;
+        private System.Threading.CancellationTokenSource _cts;
+        private bool _isConnected;
+        
+        public IEnumerator Connect(string url)
+        {
+            _socket = new System.Net.WebSockets.ClientWebSocket();
+            _cts = new System.Threading.CancellationTokenSource();
+            
+            var connectTask = _socket.ConnectAsync(new Uri(url), _cts.Token);
+            
+            while (!connectTask.IsCompleted)
+            {
+                yield return null;
+            }
+            
+            if (connectTask.IsFaulted)
+            {
+                OnError?.Invoke(connectTask.Exception?.InnerException?.Message ?? "Connection failed");
+                yield break;
+            }
+            
+            _isConnected = true;
+            OnOpen?.Invoke();
+            
+            // Start receive loop
+            _ = ReceiveLoop();
+        }
+        
+        private async System.Threading.Tasks.Task ReceiveLoop()
+        {
+            var buffer = new byte[4096];
+            var messageBuffer = new System.Collections.Generic.List<byte>();
+            
+            try
+            {
+                while (_isConnected && _socket.State == System.Net.WebSockets.WebSocketState.Open)
+                {
+                    var result = await _socket.ReceiveAsync(
+                        new ArraySegment<byte>(buffer), 
+                        _cts.Token
+                    );
+                    
+                    if (result.MessageType == System.Net.WebSockets.WebSocketMessageType.Close)
+                    {
+                        _isConnected = false;
+                        OnClose?.Invoke();
+                        break;
+                    }
+                    
+                    messageBuffer.AddRange(new ArraySegment<byte>(buffer, 0, result.Count));
+                    
+                    if (result.EndOfMessage)
+                    {
+                        var message = System.Text.Encoding.UTF8.GetString(messageBuffer.ToArray());
+                        messageBuffer.Clear();
+                        
+                        lock (_lock)
+                        {
+                            _messageQueue.Enqueue(message);
+                        }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                if (_isConnected)
+                {
+                    OnError?.Invoke(e.Message);
+                    _isConnected = false;
+                    OnClose?.Invoke();
+                }
+            }
+        }
+        
+        public void Close()
+        {
+            _isConnected = false;
+            _cts?.Cancel();
+            
+            try
+            {
+                if (_socket?.State == System.Net.WebSockets.WebSocketState.Open)
+                {
+                    _ = _socket.CloseAsync(
+                        System.Net.WebSockets.WebSocketCloseStatus.NormalClosure,
+                        "Client closing",
+                        System.Threading.CancellationToken.None
+                    );
+                }
+            }
+            catch { }
+            
+            OnClose?.Invoke();
+        }
+        
+        public void Send(string message)
+        {
+            if (_socket?.State != System.Net.WebSockets.WebSocketState.Open) return;
+            
+            var bytes = System.Text.Encoding.UTF8.GetBytes(message);
+            _ = _socket.SendAsync(
+                new ArraySegment<byte>(bytes),
+                System.Net.WebSockets.WebSocketMessageType.Text,
+                true,
+                _cts?.Token ?? System.Threading.CancellationToken.None
+            );
+        }
+#endif
+        
+        public void DispatchMessageQueue()
+        {
+            lock (_lock)
+            {
+                while (_messageQueue.Count > 0)
+                {
+                    var message = _messageQueue.Dequeue();
+                    OnMessage?.Invoke(message);
+                }
+            }
         }
     }
 }

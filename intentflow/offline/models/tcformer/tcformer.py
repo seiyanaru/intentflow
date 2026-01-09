@@ -155,7 +155,7 @@ class MultiKernelConvBlock(nn.Module):
         x = self.temporal_conv_2(x)                      
         
         # Group attention (optional) 
-        if self.use_group_attn:
+        if self.use_group_attn:        
             # Debug: norm before GA
             with torch.no_grad():
                 pre = torch.linalg.vector_norm(x.float(), ord=2, dim=(1, 2, 3))

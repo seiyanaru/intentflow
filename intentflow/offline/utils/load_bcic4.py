@@ -31,33 +31,33 @@ def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict 
             
             if dataset_code == "2a":
                 # BCIC IV 2a filename convention: A01T.gdf, A01E.gdf, etc.
-                for session_code, suffix in [("session_T", "T"), ("session_E", "E")]:
-                    filename = f"A{subj_str}{suffix}.gdf"
-                    filepath = os.path.join(data_path, filename)
+            for session_code, suffix in [("session_T", "T"), ("session_E", "E")]:
+                filename = f"A{subj_str}{suffix}.gdf"
+                filepath = os.path.join(data_path, filename)
+                
+                if not os.path.exists(filepath):
+                    print(f"Warning: File {filepath} not found. Skipping.")
+                    continue
                     
-                    if not os.path.exists(filepath):
-                        print(f"Warning: File {filepath} not found. Skipping.")
-                        continue
-                        
-                    # Load raw data
-                    try:
-                        raw = mne.io.read_raw_gdf(filepath, preload=True, verbose=verbose)
-                    except Exception as e:
-                        print(f"Error loading {filepath}: {e}")
-                        continue
+                # Load raw data
+                try:
+                    raw = mne.io.read_raw_gdf(filepath, preload=True, verbose=verbose)
+                except Exception as e:
+                    print(f"Error loading {filepath}: {e}")
+                    continue
 
                     # Check if raw contains target events (2a: 769-772)
-                    target_events = {'769', '770', '771', '772'}
-                    if not any(event in raw.annotations.description for event in target_events):
-                        if verbose:
-                            print(f"Skipping {filepath}: No target events found.")
-                        continue
+                target_events = {'769', '770', '771', '772'}
+                if not any(event in raw.annotations.description for event in target_events):
+                    if verbose:
+                        print(f"Skipping {filepath}: No target events found.")
+                    continue
 
-                    description = pd.Series({
-                        "subject": subject_id,
-                        "session": session_code,
-                        "run": session_code
-                    })
+                description = pd.Series({
+                    "subject": subject_id,
+                    "session": session_code,
+                    "run": session_code
+                })
                     datasets.append(BaseDataset(raw, description))
                     
             elif dataset_code == "2b":
@@ -95,8 +95,8 @@ def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict 
                         "session": f"session_{session_idx}",
                         "run": f"session_{session_idx}"
                     })
-                    
-                    datasets.append(BaseDataset(raw, description))
+                
+                datasets.append(BaseDataset(raw, description))
         
         if not datasets:
             raise FileNotFoundError(f"No valid GDF files found in {data_path} for subjects {subject_ids}")
@@ -141,13 +141,13 @@ def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict 
     if verbose:
         descriptions = set()
         for ds in dataset_obj.datasets:
-            descriptions.update(ds.raw.annotations.description)
+             descriptions.update(ds.raw.annotations.description)
         print("Unique descriptions in annotations:", descriptions)
 
     if dataset_code == "2a":
-        mapping = {
-            '769': 0, '770': 1, '771': 2, '772': 3,
-        }
+    mapping = {
+        '769': 0, '770': 1, '771': 2, '772': 3,
+    }
     else:  # 2b
         mapping = {
             '769': 0, '770': 1,
