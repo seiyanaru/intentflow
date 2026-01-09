@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.UI;
+using TMPro;
 using IntentFlow.Inputs;
 using IntentFlow.Inputs.MI;
 
@@ -14,11 +15,11 @@ namespace Tasks.Runner3Lane.UI
     public class BciFeedback : MonoBehaviour
     {
         [Header("UI References")]
-        [SerializeField] private Text predictionText;
-        [SerializeField] private Text confidenceText;
+        [SerializeField] private TMP_Text predictionText;
+        [SerializeField] private TMP_Text confidenceText;
         [SerializeField] private Image confidenceBar;
         [SerializeField] private Image connectionIndicator;
-        [SerializeField] private Text connectionText;
+        [SerializeField] private TMP_Text connectionText;
         
         [Header("Colors")]
         [SerializeField] private Color leftColor = new Color(0.2f, 0.6f, 1f);
