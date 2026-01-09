@@ -9,6 +9,7 @@ namespace Tasks.Runner3Lane.InputAdapters
     {
         [SerializeField] private RunnerController runner;
         [SerializeField] private MonoBehaviour sourceBehaviour;
+        [SerializeField] private bool allowKeyboardInput = true;
 
         public int SuccessCount { get; private set; }
         public int FalseMoveCount { get; private set; }
@@ -53,12 +54,32 @@ namespace Tasks.Runner3Lane.InputAdapters
 
         private void Update()
         {
-            if (!_enabled || _source == null || runner == null)
+            if (!_enabled || runner == null)
             {
                 return;
             }
 
-            if (_source.TryRead(out var signal))
+            // Keyboard input (for testing)
+            if (allowKeyboardInput)
+            {
+                if (Input.GetKeyDown(KeyCode.LeftArrow) || Input.GetKeyDown(KeyCode.A))
+                {
+                    runner.MoveLeft();
+                    SuccessCount++;
+                    ActionTaken?.Invoke(IntentType.Left);
+                    return;
+                }
+                if (Input.GetKeyDown(KeyCode.RightArrow) || Input.GetKeyDown(KeyCode.D))
+                {
+                    runner.MoveRight();
+                    SuccessCount++;
+                    ActionTaken?.Invoke(IntentType.Right);
+                    return;
+                }
+            }
+
+            // BCI input from MiSource
+            if (_source != null && _source.TryRead(out var signal))
             {
                 switch (signal.Type)
                 {
