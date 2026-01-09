@@ -13,6 +13,7 @@ GameObject:
   - component: {fileID: 8994033576073122446}
   - component: {fileID: 6771068510788082691}
   - component: {fileID: 7075288207438321097}
+  - component: {fileID: 8301465208868156025}
   m_Layer: 0
   m_Name: Obstacle
   m_TagString: Untagged
@@ -63,7 +64,7 @@ MeshRenderer:
   m_RenderingLayerMask: 1
   m_RendererPriority: 0
   m_Materials:
-  - {fileID: 10303, guid: 0000000000000000f000000000000000, type: 0}
+  - {fileID: 2100000, guid: c0a9c3b2861b44186bbb0bf36fb00652, type: 2}
   m_StaticBatchInfo:
     firstSubMesh: 0
     subMeshCount: 0
@@ -118,3 +119,23 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 3bcae81e4003e42c7a4f2ac56f470b3d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+--- !u!114 &8301465208868156025
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5606347900727855541}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3dd4116abd0ce4289becab620e92bbd1, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  enableRotation: 1
+  rotationSpeed: {x: 0, y: 90, z: 0}
+  enablePulse: 0
+  pulseSpeed: 2
+  pulseAmount: 0.1
+  enableHover: 1
+  hoverSpeed: 2
+  hoverHeight: 0.2
