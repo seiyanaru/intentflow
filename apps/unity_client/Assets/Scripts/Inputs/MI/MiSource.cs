@@ -315,11 +315,33 @@ namespace IntentFlow.Inputs.MI
             _socket = new System.Net.WebSockets.ClientWebSocket();
             _cts = new System.Threading.CancellationTokenSource();
             
-            var connectTask = _socket.ConnectAsync(new Uri(url), _cts.Token);
+            // Set proper WebSocket headers
+            _socket.Options.SetRequestHeader("Connection", "Upgrade");
+            _socket.Options.SetRequestHeader("Upgrade", "websocket");
             
-            while (!connectTask.IsCompleted)
+            System.Threading.Tasks.Task connectTask = null;
+            try
             {
+                connectTask = _socket.ConnectAsync(new Uri(url), _cts.Token);
+            }
+            catch (Exception e)
+            {
+                OnError?.Invoke($"Connection setup failed: {e.Message}");
+                yield break;
+            }
+            
+            float timeout = 10f;
+            float elapsed = 0f;
+            while (!connectTask.IsCompleted && elapsed < timeout)
+            {
+                elapsed += UnityEngine.Time.deltaTime;
                 yield return null;
+            }
+            
+            if (!connectTask.IsCompleted)
+            {
+                OnError?.Invoke("Connection timeout");
+                yield break;
             }
             
             if (connectTask.IsFaulted)
