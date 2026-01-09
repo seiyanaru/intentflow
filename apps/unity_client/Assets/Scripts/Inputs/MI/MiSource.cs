@@ -1,10 +1,26 @@
 using System;
 using System.Collections;
+using System.IO;
 using UnityEngine;
 using IntentFlow.Inputs;
 
 namespace IntentFlow.Inputs.MI
 {
+    // #region Debug Helper
+    public static class DebugLog
+    {
+        private static readonly string LogPath = "/workspace-cloud/seiya.narukawa/intentflow/.cursor/debug.log";
+        public static void Log(string hyp, string loc, string msg, object data = null)
+        {
+            try
+            {
+                var json = $"{{\"hypothesisId\":\"{hyp}\",\"location\":\"{loc}\",\"message\":\"{msg}\",\"data\":\"{data}\",\"timestamp\":{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
+                File.AppendAllText(LogPath, json + "\n");
+            }
+            catch { }
+        }
+    }
+    // #endregion
     /// <summary>
     /// Motor Imagery input source that connects to the Python TTT Broadcaster
     /// via WebSocket and receives prediction intents.
@@ -103,6 +119,9 @@ namespace IntentFlow.Inputs.MI
         
         private void HandleOpen()
         {
+            // #region agent log
+            DebugLog.Log("C", "MiSource:HandleOpen", "WebSocket_connected", serverUrl);
+            // #endregion
             IsConnected = true;
             ConnectionStateChanged?.Invoke(true);
             
@@ -114,6 +133,9 @@ namespace IntentFlow.Inputs.MI
         
         private void HandleClose()
         {
+            // #region agent log
+            DebugLog.Log("C", "MiSource:HandleClose", "WebSocket_disconnected", null);
+            // #endregion
             IsConnected = false;
             ConnectionStateChanged?.Invoke(false);
             
@@ -135,6 +157,12 @@ namespace IntentFlow.Inputs.MI
             {
                 Debug.LogError($"[MiSource] WebSocket error: {error}");
             }
+            
+            // Auto-reconnect on connection failure
+            if (_shouldReconnect && !IsConnected)
+            {
+                StartCoroutine(ReconnectCoroutine());
+            }
         }
         
         private IEnumerator ReconnectCoroutine()
@@ -153,6 +181,9 @@ namespace IntentFlow.Inputs.MI
         
         private void HandleMessage(string message)
         {
+            // #region agent log
+            DebugLog.Log("C", "MiSource:HandleMessage", "raw_message_received", message?.Substring(0, Math.Min(100, message?.Length ?? 0)));
+            // #endregion
             if (logMessages)
             {
                 Debug.Log($"[MiSource] Raw message: {message}");

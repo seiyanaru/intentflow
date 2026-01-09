@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using UnityEngine;
 using IntentFlow.Inputs;
 using Tasks.Runner3Lane.Core;
@@ -7,6 +8,17 @@ namespace Tasks.Runner3Lane.InputAdapters
 {
     public class RunnerInputAdapter : MonoBehaviour
     {
+        // #region Debug Helper
+        private static void DebugLog(string hyp, string loc, string msg, object data = null)
+        {
+            try
+            {
+                var json = $"{{\"hypothesisId\":\"{hyp}\",\"location\":\"{loc}\",\"message\":\"{msg}\",\"data\":\"{data}\",\"timestamp\":{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
+                File.AppendAllText("/workspace-cloud/seiya.narukawa/intentflow/.cursor/debug.log", json + "\n");
+            }
+            catch { }
+        }
+        // #endregion
         [SerializeField] private RunnerController runner;
         [SerializeField] private MonoBehaviour sourceBehaviour;
         [SerializeField] private bool allowKeyboardInput = true;
@@ -32,6 +44,9 @@ namespace Tasks.Runner3Lane.InputAdapters
             {
                 runner = FindObjectOfType<RunnerController>();
             }
+            // #region agent log
+            DebugLog("D", "RunnerInputAdapter:Awake", "init_state", $"source={_source != null},runner={runner != null},sourceBehaviour={sourceBehaviour?.name}");
+            // #endregion
         }
 
         public void SetSource(IIntentSource source)
@@ -81,6 +96,9 @@ namespace Tasks.Runner3Lane.InputAdapters
             // BCI input from MiSource
             if (_source != null && _source.TryRead(out var signal))
             {
+                // #region agent log
+                DebugLog("D", "RunnerInputAdapter:Update", "bci_signal_received", $"type={signal.Type},conf={signal.Confidence}");
+                // #endregion
                 switch (signal.Type)
                 {
                     case IntentType.Left:
