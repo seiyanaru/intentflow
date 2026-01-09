@@ -59,6 +59,12 @@ namespace Tasks.Runner3Lane.Core
                 return;
             }
 
+            // Check if already in available queue (double release prevention)
+            if (_available.Contains(item))
+            {
+                return;
+            }
+
             var removed = _active.Remove(item);
             if (!removed && collectionCheck)
             {

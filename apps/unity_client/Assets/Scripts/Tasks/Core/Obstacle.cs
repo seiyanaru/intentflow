@@ -21,7 +21,9 @@ namespace Tasks.Runner3Lane.Core
         {
             if (_pool != null)
             {
-                _pool.Release(this);
+                var pool = _pool;
+                _pool = null;  // Prevent double release
+                pool.Release(this);
             }
             else
             {
