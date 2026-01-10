@@ -35,6 +35,11 @@ namespace Tasks.Runner3Lane.UI
         // Last signal info
         private IntentSignal? _lastSignal;
         
+        // Clock offset calibration (Python clock - Unity clock)
+        private List<double> _clockOffsets = new();
+        private double? _calibratedOffset;
+        private const int CALIBRATION_SAMPLES = 5;
+        
         private void Start()
         {
             if (inputAdapter == null)
@@ -181,22 +186,44 @@ namespace Tasks.Runner3Lane.UI
                 lines.Add($"Inference: {s.InferenceMs:F0} ms");
             }
             
-            // Network: Server send -> Unity receive
-            double networkLatency = s.ReceiveTs - s.SendTs;
+            // Calibrate clock offset between Python and Unity
+            // offset = send_ts - recv_ts (positive if Python clock is ahead)
+            double rawOffset = s.SendTs - s.ReceiveTs;
             if (s.ReceiveTs > 0 && s.SendTs > 0)
             {
-                // Handle clock skew - if negative or too large, show as "sync error"
-                if (networkLatency >= 0 && networkLatency < 10000)
+                if (!_calibratedOffset.HasValue && _clockOffsets.Count < CALIBRATION_SAMPLES)
                 {
+                    _clockOffsets.Add(rawOffset);
+                    if (_clockOffsets.Count >= CALIBRATION_SAMPLES)
+                    {
+                        // Use median for robustness
+                        _clockOffsets.Sort();
+                        _calibratedOffset = _clockOffsets[CALIBRATION_SAMPLES / 2];
+                        Debug.Log($"[BciLatencyDisplay] Clock offset calibrated: {_calibratedOffset:F1} ms (Python ahead)");
+                    }
+                }
+            }
+            
+            // Network: Server send -> Unity receive (corrected for clock offset)
+            double networkLatency = -1;
+            if (s.ReceiveTs > 0 && s.SendTs > 0)
+            {
+                if (_calibratedOffset.HasValue)
+                {
+                    // Corrected: recv_ts + offset should be comparable to send_ts
+                    networkLatency = (s.ReceiveTs + _calibratedOffset.Value) - s.SendTs;
+                    // Network latency should be small positive, clamp to reasonable range
+                    if (networkLatency < 0) networkLatency = 0;
+                    if (networkLatency > 500) networkLatency = 500; // cap at 500ms
                     lines.Add($"Network: {networkLatency:F0} ms");
                 }
                 else
                 {
-                    lines.Add($"Network: (sync?)");
+                    lines.Add($"Network: (cal {_clockOffsets.Count}/{CALIBRATION_SAMPLES})");
                 }
             }
             
-            // Unity processing: receive -> apply
+            // Unity processing: receive -> apply (local measurement, always accurate)
             double unityProcessing = s.ApplyTs - s.ReceiveTs;
             if (s.ApplyTs > 0 && s.ReceiveTs > 0 && unityProcessing >= 0)
             {
@@ -212,7 +239,7 @@ namespace Tasks.Runner3Lane.UI
                 totalLatency += s.InferenceMs;
                 hasTotal = true;
             }
-            if (networkLatency >= 0 && networkLatency < 10000)
+            if (networkLatency >= 0)
             {
                 totalLatency += networkLatency;
             }
@@ -225,11 +252,14 @@ namespace Tasks.Runner3Lane.UI
             {
                 lines.Add($"TOTAL: {totalLatency:F0} ms");
                 
-                // Track for average
-                _totalLatencies.Add(totalLatency);
-                if (_totalLatencies.Count > historySize)
+                // Track for average (only after calibration)
+                if (_calibratedOffset.HasValue)
                 {
-                    _totalLatencies.RemoveAt(0);
+                    _totalLatencies.Add(totalLatency);
+                    if (_totalLatencies.Count > historySize)
+                    {
+                        _totalLatencies.RemoveAt(0);
+                    }
                 }
             }
             
@@ -243,12 +273,16 @@ namespace Tasks.Runner3Lane.UI
             latencyText.text = string.Join("\n", lines);
             
             // Color based on total latency (target: < 200ms)
-            if (hasTotal)
+            if (hasTotal && _calibratedOffset.HasValue)
             {
                 if (totalLatency <= 100) latencyText.color = new Color(0.4f, 1f, 0.4f);      // Green: excellent
                 else if (totalLatency <= 200) latencyText.color = new Color(1f, 0.9f, 0.3f); // Yellow: good
                 else if (totalLatency <= 300) latencyText.color = new Color(1f, 0.6f, 0.2f); // Orange: acceptable
                 else latencyText.color = new Color(1f, 0.4f, 0.4f);                          // Red: slow
+            }
+            else
+            {
+                latencyText.color = Color.yellow; // Calibrating
             }
         }
         
@@ -310,6 +344,8 @@ namespace Tasks.Runner3Lane.UI
             _correctCount = 0;
             _networkLatencies.Clear();
             _totalLatencies.Clear();
+            _clockOffsets.Clear();
+            _calibratedOffset = null;
             _lastSignal = null;
             UpdateUI();
         }
