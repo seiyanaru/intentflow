@@ -241,12 +241,16 @@ namespace IntentFlow.Inputs.MI
                 
                 IntentReceived?.Invoke(signal);
                 
-                // Log with latency info
+                // Log with detailed debug info
                 if (logMessages)
                 {
+                    // Debug: Show all parsed values
+                    Debug.Log($"[MiSource] PARSED: pred_ts={intent.prediction_ts}, send_ts={intent.send_ts}, " +
+                              $"recv_ts={receiveTs}, true_label='{intent.true_label}', trial={intent.trial_idx}");
+                    
                     double networkLatency = signal.NetworkLatency;
-                    string latencyStr = networkLatency >= 0 ? $", net={networkLatency:F0}ms" : "";
-                    string trueStr = !string.IsNullOrEmpty(intent.true_label) ? $", true={intent.true_label}" : "";
+                    string latencyStr = networkLatency >= 0 ? $", net={networkLatency:F0}ms" : $" (net calc failed: send={intent.send_ts}, recv={receiveTs})";
+                    string trueStr = !string.IsNullOrEmpty(intent.true_label) ? $", true={intent.true_label}" : " (no true_label)";
                     Debug.Log($"[MiSource] Received: {intentType} (conf={intent.conf:F2}{trueStr}{latencyStr}) trial={intent.trial_idx}");
                 }
             }
