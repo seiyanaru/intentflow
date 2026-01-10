@@ -45,15 +45,32 @@ from intentflow.online.dsp.stream_preprocessor import WindowNormalizer
 def create_intent_message(
     intent: str,
     confidence: float,
-    timestamp: float,
+    prediction_ts: float,
+    true_label: Optional[str] = None,
+    trial_idx: int = -1,
 ) -> Dict[str, Any]:
-    """Create an intent message compatible with Unity client."""
+    """
+    Create an intent message compatible with Unity client.
+    
+    Timestamps are in milliseconds (Unix epoch) for latency measurement.
+    
+    Args:
+        intent: Predicted intent ("left", "right", "idle")
+        confidence: Model confidence [0, 1]
+        prediction_ts: When model prediction completed (ms)
+        true_label: Ground truth label if available
+        trial_idx: Trial index for tracking
+    """
+    send_ts = time.time() * 1000  # Current time in ms
     return {
         "type": "intent",
         "intent": intent,
         "conf": confidence,
-        "ts": timestamp,
-        "protocol_version": 1,
+        "prediction_ts": prediction_ts,  # Model prediction time (ms)
+        "send_ts": send_ts,              # Server send time (ms)
+        "true_label": true_label,        # Ground truth
+        "trial_idx": trial_idx,          # Trial number
+        "protocol_version": 2,
     }
 
 
@@ -182,6 +199,7 @@ class TTTBroadcaster:
         self,
         trial: np.ndarray,
         label: Optional[int] = None,
+        trial_idx: int = -1,
         verbose: bool = True,
     ) -> Dict[str, Any]:
         """
@@ -190,6 +208,7 @@ class TTTBroadcaster:
         Args:
             trial: EEG data [C, T].
             label: Ground truth label (optional, for metrics).
+            trial_idx: Current trial index.
             verbose: Print prediction info.
             
         Returns:
@@ -198,14 +217,22 @@ class TTTBroadcaster:
         # Normalize
         normalized = self.normalizer(trial)
         
+        # Record prediction start time
+        pred_start_ts = time.time() * 1000  # ms
+        
         # Predict
         result = self.model.predict_step(normalized)
+        
+        # Record prediction end time
+        prediction_ts = time.time() * 1000  # ms
+        inference_time = prediction_ts - pred_start_ts
         
         pred_idx = result['pred_idx']
         confidence = result['confidence']
         
         # Map to intent
         intent = CLASS_TO_INTENT.get(pred_idx, "idle")
+        true_label = CLASS_TO_INTENT.get(label, None) if label is not None else None
         
         # For two-class mode, skip non-left/right predictions
         if self.two_class_only and intent == "idle":
@@ -219,25 +246,28 @@ class TTTBroadcaster:
                 print(f"  [Low Conf] pred={intent}, conf={confidence:.2f} < {self.confidence_threshold}")
             return result
         
-        # Create and broadcast message
-        current_time = time.time()
+        # Create and broadcast message with detailed timestamps
         message = create_intent_message(
             intent=intent,
             confidence=confidence,
-            timestamp=current_time,
+            prediction_ts=prediction_ts,
+            true_label=true_label,
+            trial_idx=trial_idx,
         )
         
         await self.broadcast(message)
         
         self.prediction_count += 1
-        if label is not None and pred_idx == label:
+        is_correct = label is not None and pred_idx == label
+        if is_correct:
             self.correct_count += 1
         
         if verbose:
             accuracy = (self.correct_count / self.prediction_count * 100) if self.prediction_count > 0 else 0
-            gt_str = f", true={CLASS_TO_INTENT.get(label, 'unknown')}" if label is not None else ""
-            print(f"  [Sent] {intent.upper()} (conf={confidence:.2f}{gt_str}) | "
-                  f"Total: {self.prediction_count}, Acc: {accuracy:.1f}%")
+            gt_str = f", true={true_label}" if true_label else ""
+            correct_str = " ✓" if is_correct else (" ✗" if label is not None else "")
+            print(f"  [Sent] {intent.upper()} (conf={confidence:.2f}{gt_str}){correct_str} | "
+                  f"inference={inference_time:.1f}ms | Total: {self.prediction_count}, Acc: {accuracy:.1f}%")
         
         return result
     
@@ -320,7 +350,12 @@ async def run_simulation(
         if verbose:
             print(f"\n[Trial {i+1}/{n_trials}]")
         
-        await broadcaster.process_trial(trial, label=int(label), verbose=verbose)
+        await broadcaster.process_trial(
+            trial, 
+            label=int(label), 
+            trial_idx=i + 1,
+            verbose=verbose
+        )
         
         # Wait between trials
         await asyncio.sleep(trial_interval)

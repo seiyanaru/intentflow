@@ -21,12 +21,18 @@ namespace Tasks.Runner3Lane.InputAdapters
         // #endregion
         [SerializeField] private RunnerController runner;
         [SerializeField] private MonoBehaviour sourceBehaviour;
-        [SerializeField] private bool allowKeyboardInput = true;
+        [SerializeField] private bool allowKeyboardInput = false;  // Disabled by default for BCI mode
 
         public int SuccessCount { get; private set; }
         public int FalseMoveCount { get; private set; }
+        
+        /// <summary>Last applied signal with full latency info.</summary>
+        public IntentSignal? LastAppliedSignal { get; private set; }
 
         public event Action<IntentType> ActionTaken;
+        
+        /// <summary>Event fired when a BCI signal is applied, includes full timing info.</summary>
+        public event Action<IntentSignal> SignalApplied;
 
         private IIntentSource _source;
         private bool _enabled = true;
@@ -96,9 +102,13 @@ namespace Tasks.Runner3Lane.InputAdapters
             // BCI input from MiSource
             if (_source != null && _source.TryRead(out var signal))
             {
+                // Record apply timestamp
+                signal.ApplyTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                
                 // #region agent log
                 DebugLog("D", "RunnerInputAdapter:Update", "bci_signal_received", $"type={signal.Type},conf={signal.Confidence}");
                 // #endregion
+                
                 switch (signal.Type)
                 {
                     case IntentType.Left:
@@ -115,6 +125,20 @@ namespace Tasks.Runner3Lane.InputAdapters
                         FalseMoveCount++;
                         ActionTaken?.Invoke(IntentType.Idle);
                         break;
+                }
+                
+                // Store and fire event with full timing info
+                LastAppliedSignal = signal;
+                SignalApplied?.Invoke(signal);
+                
+                // Log latency info
+                if (signal.TotalLatency >= 0)
+                {
+                    string correctStr = signal.IsCorrect.HasValue 
+                        ? (signal.IsCorrect.Value ? " ✓" : " ✗") 
+                        : "";
+                    Debug.Log($"[BCI] {signal.Type} applied | " +
+                              $"net={signal.NetworkLatency:F0}ms, total={signal.TotalLatency:F0}ms{correctStr}");
                 }
             }
         }

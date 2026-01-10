@@ -181,6 +181,9 @@ namespace IntentFlow.Inputs.MI
         
         private void HandleMessage(string message)
         {
+            // Record receive timestamp immediately
+            double receiveTs = GetCurrentTimeMs();
+            
             // #region agent log
             DebugLog.Log("C", "MiSource:HandleMessage", "raw_message_received", message?.Substring(0, Math.Min(100, message?.Length ?? 0)));
             // #endregion
@@ -216,11 +219,20 @@ namespace IntentFlow.Inputs.MI
                     return;
                 }
                 
+                // Create signal with detailed timing info
                 var signal = new IntentSignal
                 {
                     Type = intentType,
                     Confidence = intent.conf,
-                    Timestamp = intent.ts,
+                    Timestamp = Time.time,
+                    // Detailed timestamps for latency analysis
+                    PredictionTs = intent.prediction_ts,
+                    SendTs = intent.send_ts,
+                    ReceiveTs = receiveTs,
+                    ApplyTs = 0,  // Will be set by RunnerInputAdapter
+                    // Ground truth info
+                    TrueLabel = intent.true_label,
+                    TrialIdx = intent.trial_idx,
                 };
                 
                 _pending = signal;
@@ -229,9 +241,13 @@ namespace IntentFlow.Inputs.MI
                 
                 IntentReceived?.Invoke(signal);
                 
+                // Log with latency info
                 if (logMessages)
                 {
-                    Debug.Log($"[MiSource] Received: {intentType} (conf={intent.conf:F2})");
+                    double networkLatency = signal.NetworkLatency;
+                    string latencyStr = networkLatency >= 0 ? $", net={networkLatency:F0}ms" : "";
+                    string trueStr = !string.IsNullOrEmpty(intent.true_label) ? $", true={intent.true_label}" : "";
+                    Debug.Log($"[MiSource] Received: {intentType} (conf={intent.conf:F2}{trueStr}{latencyStr}) trial={intent.trial_idx}");
                 }
             }
             catch (Exception e)
@@ -273,15 +289,24 @@ namespace IntentFlow.Inputs.MI
             Timestamp = Time.time,
         };
         
-        /// <summary>Intent message from Python server.</summary>
+        /// <summary>Intent message from Python server (protocol v2).</summary>
         [Serializable]
         private class IntentMessage
         {
             public string type;
             public string intent;
             public float conf;
-            public float ts;
+            public double prediction_ts;  // When model prediction completed (ms)
+            public double send_ts;        // When server sent the message (ms)
+            public string true_label;     // Ground truth label
+            public int trial_idx;         // Trial index
             public int protocol_version;
+        }
+        
+        /// <summary>Get current time in milliseconds (Unix epoch).</summary>
+        private static double GetCurrentTimeMs()
+        {
+            return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         }
     }
     
