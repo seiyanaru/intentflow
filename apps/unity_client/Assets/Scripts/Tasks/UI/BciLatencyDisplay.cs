@@ -88,24 +88,7 @@ namespace Tasks.Runner3Lane.UI
                 _correctCount++;
             }
             
-            // Track latencies
-            if (signal.NetworkLatency >= 0)
-            {
-                _networkLatencies.Add(signal.NetworkLatency);
-                if (_networkLatencies.Count > historySize)
-                {
-                    _networkLatencies.RemoveAt(0);
-                }
-            }
-            
-            if (signal.TotalLatency >= 0)
-            {
-                _totalLatencies.Add(signal.TotalLatency);
-                if (_totalLatencies.Count > historySize)
-                {
-                    _totalLatencies.RemoveAt(0);
-                }
-            }
+            // Latency tracking is now done in UpdateLatencyText()
             
             UpdateUI();
             
@@ -192,22 +175,62 @@ namespace Tasks.Runner3Lane.UI
             
             lines.Add("[LATENCY]");
             
-            // Inference: EEG input -> classification
+            // Inference: EEG input -> classification (from server)
             if (s.InferenceMs > 0)
             {
                 lines.Add($"Inference: {s.InferenceMs:F0} ms");
             }
             
             // Network: Server send -> Unity receive
-            if (s.NetworkLatency >= 0)
+            double networkLatency = s.ReceiveTs - s.SendTs;
+            if (s.ReceiveTs > 0 && s.SendTs > 0)
             {
-                lines.Add($"Network: {s.NetworkLatency:F0} ms");
+                // Handle clock skew - if negative or too large, show as "sync error"
+                if (networkLatency >= 0 && networkLatency < 10000)
+                {
+                    lines.Add($"Network: {networkLatency:F0} ms");
+                }
+                else
+                {
+                    lines.Add($"Network: (sync?)");
+                }
             }
             
-            // Total: Prediction -> Runner moved
-            if (s.TotalLatency >= 0)
+            // Unity processing: receive -> apply
+            double unityProcessing = s.ApplyTs - s.ReceiveTs;
+            if (s.ApplyTs > 0 && s.ReceiveTs > 0 && unityProcessing >= 0)
             {
-                lines.Add($"Total: {s.TotalLatency:F0} ms");
+                lines.Add($"Unity: {unityProcessing:F0} ms");
+            }
+            
+            // Total: EEG -> Runner moved (Inference + Network + Unity)
+            double totalLatency = 0;
+            bool hasTotal = false;
+            
+            if (s.InferenceMs > 0)
+            {
+                totalLatency += s.InferenceMs;
+                hasTotal = true;
+            }
+            if (networkLatency >= 0 && networkLatency < 10000)
+            {
+                totalLatency += networkLatency;
+            }
+            if (unityProcessing >= 0)
+            {
+                totalLatency += unityProcessing;
+            }
+            
+            if (hasTotal)
+            {
+                lines.Add($"TOTAL: {totalLatency:F0} ms");
+                
+                // Track for average
+                _totalLatencies.Add(totalLatency);
+                if (_totalLatencies.Count > historySize)
+                {
+                    _totalLatencies.RemoveAt(0);
+                }
             }
             
             // Average
@@ -219,12 +242,13 @@ namespace Tasks.Runner3Lane.UI
             
             latencyText.text = string.Join("\n", lines);
             
-            // Color: green < 100ms, yellow < 200ms, red > 200ms
-            if (s.TotalLatency >= 0)
+            // Color based on total latency (target: < 200ms)
+            if (hasTotal)
             {
-                if (s.TotalLatency <= 100) latencyText.color = new Color(0.4f, 1f, 0.4f);
-                else if (s.TotalLatency <= 200) latencyText.color = new Color(1f, 0.9f, 0.3f);
-                else latencyText.color = new Color(1f, 0.4f, 0.4f);
+                if (totalLatency <= 100) latencyText.color = new Color(0.4f, 1f, 0.4f);      // Green: excellent
+                else if (totalLatency <= 200) latencyText.color = new Color(1f, 0.9f, 0.3f); // Yellow: good
+                else if (totalLatency <= 300) latencyText.color = new Color(1f, 0.6f, 0.2f); // Orange: acceptable
+                else latencyText.color = new Color(1f, 0.4f, 0.4f);                          // Red: slow
             }
         }
         
