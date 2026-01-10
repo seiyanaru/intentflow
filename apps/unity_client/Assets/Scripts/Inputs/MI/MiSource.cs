@@ -230,6 +230,7 @@ namespace IntentFlow.Inputs.MI
                     SendTs = intent.send_ts,
                     ReceiveTs = receiveTs,
                     ApplyTs = 0,  // Will be set by RunnerInputAdapter
+                    InferenceMs = intent.inference_ms,  // Model inference time
                     // Ground truth info
                     TrueLabel = intent.true_label,
                     TrialIdx = intent.trial_idx,
@@ -293,7 +294,7 @@ namespace IntentFlow.Inputs.MI
             Timestamp = Time.time,
         };
         
-        /// <summary>Intent message from Python server (protocol v2).</summary>
+        /// <summary>Intent message from Python server (protocol v3).</summary>
         [Serializable]
         private class IntentMessage
         {
@@ -302,6 +303,7 @@ namespace IntentFlow.Inputs.MI
             public float conf;
             public double prediction_ts;  // When model prediction completed (ms)
             public double send_ts;        // When server sent the message (ms)
+            public double inference_ms;   // Model inference time (ms)
             public string true_label;     // Ground truth label
             public int trial_idx;         // Trial index
             public int protocol_version;

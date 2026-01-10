@@ -262,7 +262,7 @@ class HybridEncoder(nn.Module):
         # x: [B, T, D]
         seq_len = x.shape[1]
         cos, sin = self._rotary_cache(seq_len, x.device)
-
+        
         alphas = []
         for layer in self.layers:
             x = layer(x, cos[:seq_len], sin[:seq_len], gate_alpha=gate_alpha, enable_ttt=enable_ttt, lr_scale=lr_scale, cache_params=cache_params)
@@ -432,7 +432,7 @@ class TCFormerHybridModule(nn.Module):
             x = self.hybrid_encoder(x, cache_params=cache_params)
 
         x = x.permute(0, 2, 1) # [B, T, D] -> [B, D, T]
-
+        
         # 3. Classification
         logits = self.tcn_head(x)
         return logits

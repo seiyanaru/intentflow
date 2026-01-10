@@ -38,6 +38,9 @@ namespace IntentFlow.Inputs
         /// <summary>When Unity applied the action (client time, ms).</summary>
         public double ApplyTs;
         
+        /// <summary>Model inference time in ms (EEG input -> classification).</summary>
+        public double InferenceMs;
+        
         // --- Ground Truth Info ---
         
         /// <summary>Ground truth label if available ("left", "right", null).</summary>

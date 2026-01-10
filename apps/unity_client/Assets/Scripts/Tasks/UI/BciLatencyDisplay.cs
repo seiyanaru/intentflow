@@ -192,6 +192,12 @@ namespace Tasks.Runner3Lane.UI
             
             lines.Add("[LATENCY]");
             
+            // Inference: EEG input -> classification
+            if (s.InferenceMs > 0)
+            {
+                lines.Add($"Inference: {s.InferenceMs:F0} ms");
+            }
+            
             // Network: Server send -> Unity receive
             if (s.NetworkLatency >= 0)
             {
@@ -201,7 +207,7 @@ namespace Tasks.Runner3Lane.UI
             // Total: Prediction -> Runner moved
             if (s.TotalLatency >= 0)
             {
-                lines.Add($"Pred->Move: {s.TotalLatency:F0} ms");
+                lines.Add($"Total: {s.TotalLatency:F0} ms");
             }
             
             // Average

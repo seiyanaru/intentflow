@@ -46,6 +46,7 @@ def create_intent_message(
     intent: str,
     confidence: float,
     prediction_ts: float,
+    inference_ms: float,
     true_label: Optional[str] = None,
     trial_idx: int = -1,
 ) -> Dict[str, Any]:
@@ -58,6 +59,7 @@ def create_intent_message(
         intent: Predicted intent ("left", "right", "idle")
         confidence: Model confidence [0, 1]
         prediction_ts: When model prediction completed (ms)
+        inference_ms: Model inference time (ms)
         true_label: Ground truth label if available
         trial_idx: Trial index for tracking
     """
@@ -68,9 +70,10 @@ def create_intent_message(
         "conf": confidence,
         "prediction_ts": prediction_ts,  # Model prediction time (ms)
         "send_ts": send_ts,              # Server send time (ms)
+        "inference_ms": inference_ms,    # Model inference time (ms)
         "true_label": true_label,        # Ground truth
         "trial_idx": trial_idx,          # Trial number
-        "protocol_version": 2,
+        "protocol_version": 3,
     }
 
 
@@ -251,6 +254,7 @@ class TTTBroadcaster:
             intent=intent,
             confidence=confidence,
             prediction_ts=prediction_ts,
+            inference_ms=inference_time,
             true_label=true_label,
             trial_idx=trial_idx,
         )
