@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 using TMPro;
 using IntentFlow.Inputs;
 using Tasks.Runner3Lane.InputAdapters;
@@ -44,13 +45,24 @@ namespace Tasks.Runner3Lane.UI
             if (inputAdapter != null)
             {
                 inputAdapter.SignalApplied += OnSignalApplied;
+                Debug.Log("[BciLatencyDisplay] Connected to RunnerInputAdapter");
             }
             else
             {
                 Debug.LogWarning("[BciLatencyDisplay] RunnerInputAdapter not found!");
             }
             
+            // Ensure Rich Text is enabled on all text elements
+            EnableRichText();
+            
             UpdateUI();
+        }
+        
+        private void EnableRichText()
+        {
+            if (predictionText != null) predictionText.richText = true;
+            if (latencyText != null) latencyText.richText = true;
+            if (statsText != null) statsText.richText = true;
         }
         
         private void OnDestroy()
@@ -66,8 +78,12 @@ namespace Tasks.Runner3Lane.UI
             _lastSignal = signal;
             _totalCount++;
             
-            // Track correctness
-            if (signal.IsCorrect.HasValue && signal.IsCorrect.Value)
+            // Debug: Check what we're receiving
+            Debug.Log($"[BciLatencyDisplay] Signal received: Type={signal.Type}, TrueLabel='{signal.TrueLabel}', IsCorrect={signal.IsCorrect}");
+            
+            // Track correctness - check if TrueLabel matches prediction
+            bool isCorrect = CheckCorrectness(signal);
+            if (isCorrect)
             {
                 _correctCount++;
             }
@@ -95,8 +111,24 @@ namespace Tasks.Runner3Lane.UI
             
             if (showInConsole)
             {
-                LogSignalDetails(signal);
+                LogSignalDetails(signal, isCorrect);
             }
+        }
+        
+        /// <summary>Check if prediction matches ground truth.</summary>
+        private bool CheckCorrectness(IntentSignal signal)
+        {
+            if (string.IsNullOrEmpty(signal.TrueLabel))
+                return false;
+            
+            string trueLabel = signal.TrueLabel.ToLowerInvariant().Trim();
+            
+            return signal.Type switch
+            {
+                IntentType.Left => trueLabel == "left",
+                IntentType.Right => trueLabel == "right",
+                _ => false
+            };
         }
         
         private void UpdateUI()
@@ -112,40 +144,34 @@ namespace Tasks.Runner3Lane.UI
             
             if (!_lastSignal.HasValue)
             {
-                predictionText.text = "Waiting for BCI signal...";
+                predictionText.text = "Waiting for BCI...";
                 return;
             }
             
             var s = _lastSignal.Value;
-            string predColor = s.Type == IntentType.Left ? "#4CAF50" : "#2196F3";  // Green for left, Blue for right
-            string prediction = s.Type.ToString().ToUpper();
-            string confStr = $"{s.Confidence * 100:F0}%";
+            bool isCorrect = CheckCorrectness(s);
             
-            string result = $"<color={predColor}><b>{prediction}</b></color> ({confStr})";
+            // Build display text (no rich text tags for reliability)
+            string prediction = s.Type == IntentType.Left ? "LEFT" : "RIGHT";
+            string confStr = $"{Mathf.RoundToInt(s.Confidence * 100)}%";
+            string checkMark = isCorrect ? " OK" : " NG";
             
-            // Add ground truth comparison
+            string text = $"Pred: {prediction} ({confStr})";
+            
             if (!string.IsNullOrEmpty(s.TrueLabel))
             {
-                string trueLabel = s.TrueLabel.ToUpper();
-                bool? isCorrect = s.IsCorrect;
-                
-                if (isCorrect.HasValue)
-                {
-                    string checkMark = isCorrect.Value ? "<color=#4CAF50>✓</color>" : "<color=#F44336>✗</color>";
-                    result += $"\nTrue: {trueLabel} {checkMark}";
-                }
-                else
-                {
-                    result += $"\nTrue: {trueLabel}";
-                }
+                text += $"\nTrue: {s.TrueLabel.ToUpper()}{checkMark}";
             }
             
             if (s.TrialIdx > 0)
             {
-                result += $"\n<size=80%>Trial #{s.TrialIdx}</size>";
+                text += $"\nTrial #{s.TrialIdx}";
             }
             
-            predictionText.text = result;
+            predictionText.text = text;
+            
+            // Set color based on correctness
+            predictionText.color = isCorrect ? new Color(0.3f, 0.8f, 0.3f) : new Color(0.9f, 0.3f, 0.3f);
         }
         
         private void UpdateLatencyText()
@@ -164,31 +190,32 @@ namespace Tasks.Runner3Lane.UI
             // Network latency
             if (s.NetworkLatency >= 0)
             {
-                string netColor = GetLatencyColor(s.NetworkLatency, 50, 100);
-                lines.Add($"Network: <color={netColor}>{s.NetworkLatency:F0}</color> ms");
+                lines.Add($"Net: {s.NetworkLatency:F0} ms");
             }
             
             // Total latency
             if (s.TotalLatency >= 0)
             {
-                string totalColor = GetLatencyColor(s.TotalLatency, 100, 200);
-                lines.Add($"Total: <color={totalColor}>{s.TotalLatency:F0}</color> ms");
+                lines.Add($"Total: {s.TotalLatency:F0} ms");
             }
             
             // Averages
-            if (_networkLatencies.Count > 0)
-            {
-                double avgNet = Average(_networkLatencies);
-                lines.Add($"<size=80%>Avg Net: {avgNet:F0} ms</size>");
-            }
-            
             if (_totalLatencies.Count > 0)
             {
                 double avgTotal = Average(_totalLatencies);
-                lines.Add($"<size=80%>Avg Total: {avgTotal:F0} ms</size>");
+                lines.Add($"Avg: {avgTotal:F0} ms");
             }
             
-            latencyText.text = string.Join("\n", lines);
+            latencyText.text = lines.Count > 0 ? string.Join("\n", lines) : "Latency: --";
+            
+            // Color based on latency (green < 100ms, yellow < 200ms, red > 200ms)
+            if (_lastSignal.HasValue && _lastSignal.Value.TotalLatency >= 0)
+            {
+                double lat = _lastSignal.Value.TotalLatency;
+                if (lat <= 100) latencyText.color = new Color(0.3f, 0.8f, 0.3f);
+                else if (lat <= 200) latencyText.color = new Color(0.9f, 0.8f, 0.2f);
+                else latencyText.color = new Color(0.9f, 0.3f, 0.3f);
+            }
         }
         
         private void UpdateStatsText()
@@ -197,23 +224,21 @@ namespace Tasks.Runner3Lane.UI
             
             if (_totalCount == 0)
             {
-                statsText.text = "Stats: No data";
+                statsText.text = "No data yet";
+                statsText.color = Color.white;
                 return;
             }
             
-            float accuracy = _totalCount > 0 ? (float)_correctCount / _totalCount * 100 : 0;
-            string accColor = accuracy >= 70 ? "#4CAF50" : (accuracy >= 50 ? "#FFC107" : "#F44336");
+            float accuracy = (float)_correctCount / _totalCount * 100f;
             
-            statsText.text = $"Predictions: {_totalCount}\n" +
-                            $"Accuracy: <color={accColor}>{accuracy:F1}%</color>\n" +
+            statsText.text = $"Trials: {_totalCount}\n" +
+                            $"Acc: {accuracy:F0}%\n" +
                             $"({_correctCount}/{_totalCount})";
-        }
-        
-        private string GetLatencyColor(double latency, double goodThreshold, double badThreshold)
-        {
-            if (latency <= goodThreshold) return "#4CAF50";  // Green
-            if (latency <= badThreshold) return "#FFC107";   // Yellow
-            return "#F44336";  // Red
+            
+            // Color based on accuracy
+            if (accuracy >= 70) statsText.color = new Color(0.3f, 0.8f, 0.3f);
+            else if (accuracy >= 50) statsText.color = new Color(0.9f, 0.8f, 0.2f);
+            else statsText.color = new Color(0.9f, 0.3f, 0.3f);
         }
         
         private double Average(List<double> values)
@@ -224,16 +249,14 @@ namespace Tasks.Runner3Lane.UI
             return sum / values.Count;
         }
         
-        private void LogSignalDetails(IntentSignal s)
+        private void LogSignalDetails(IntentSignal s, bool isCorrect)
         {
-            string correctStr = s.IsCorrect.HasValue 
-                ? (s.IsCorrect.Value ? "CORRECT" : "WRONG") 
-                : "N/A";
+            string correctStr = isCorrect ? "CORRECT" : "WRONG";
+            if (string.IsNullOrEmpty(s.TrueLabel)) correctStr = "N/A";
             
-            Debug.Log($"[BciLatency] Trial {s.TrialIdx}: " +
-                      $"pred={s.Type}, true={s.TrueLabel ?? "N/A"}, result={correctStr}, " +
-                      $"conf={s.Confidence:F2}, " +
-                      $"network={s.NetworkLatency:F0}ms, total={s.TotalLatency:F0}ms");
+            Debug.Log($"[BCI] Trial {s.TrialIdx}: " +
+                      $"{s.Type} vs {s.TrueLabel ?? "?"} = {correctStr} | " +
+                      $"conf={s.Confidence:F0}%, net={s.NetworkLatency:F0}ms, total={s.TotalLatency:F0}ms");
         }
         
         /// <summary>Reset all statistics.</summary>
