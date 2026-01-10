@@ -144,7 +144,7 @@ namespace Tasks.Runner3Lane.UI
             
             if (!_lastSignal.HasValue)
             {
-                predictionText.text = "[BCI予測] 待機中...";
+                predictionText.text = "[PREDICTION]\nWaiting...";
                 predictionText.color = Color.gray;
                 return;
             }
@@ -152,25 +152,24 @@ namespace Tasks.Runner3Lane.UI
             var s = _lastSignal.Value;
             bool isCorrect = CheckCorrectness(s);
             
-            // 予測結果を分かりやすく表示
             string prediction = s.Type == IntentType.Left ? "LEFT" : "RIGHT";
             int confPercent = Mathf.RoundToInt(s.Confidence * 100);
-            string resultMark = isCorrect ? "正解" : "不正解";
+            string resultMark = isCorrect ? "OK" : "NG";
             
             var lines = new List<string>();
-            lines.Add($"[BCI予測]");
-            lines.Add($"  予測: {prediction}");
-            lines.Add($"  確信度: {confPercent}%");
+            lines.Add("[PREDICTION]");
+            lines.Add($"Pred: {prediction}");
+            lines.Add($"Conf: {confPercent}%");
             
             if (!string.IsNullOrEmpty(s.TrueLabel))
             {
-                lines.Add($"  正解: {s.TrueLabel.ToUpper()}");
-                lines.Add($"  結果: {resultMark}");
+                lines.Add($"True: {s.TrueLabel.ToUpper()}");
+                lines.Add($"Result: {resultMark}");
             }
             
             if (s.TrialIdx > 0)
             {
-                lines.Add($"  試行: #{s.TrialIdx}");
+                lines.Add($"Trial: #{s.TrialIdx}");
             }
             
             predictionText.text = string.Join("\n", lines);
@@ -183,7 +182,7 @@ namespace Tasks.Runner3Lane.UI
             
             if (!_lastSignal.HasValue)
             {
-                latencyText.text = "[処理時間] 待機中...";
+                latencyText.text = "[LATENCY]\nWaiting...";
                 latencyText.color = Color.gray;
                 return;
             }
@@ -191,30 +190,30 @@ namespace Tasks.Runner3Lane.UI
             var s = _lastSignal.Value;
             var lines = new List<string>();
             
-            lines.Add("[処理時間]");
+            lines.Add("[LATENCY]");
             
-            // ネットワーク遅延: サーバー送信 → Unity受信
+            // Network: Server send -> Unity receive
             if (s.NetworkLatency >= 0)
             {
-                lines.Add($"  通信: {s.NetworkLatency:F0} ms");
+                lines.Add($"Network: {s.NetworkLatency:F0} ms");
             }
             
-            // トータル遅延: 予測完了 → Runner移動
+            // Total: Prediction -> Runner moved
             if (s.TotalLatency >= 0)
             {
-                lines.Add($"  予測→移動: {s.TotalLatency:F0} ms");
+                lines.Add($"Pred->Move: {s.TotalLatency:F0} ms");
             }
             
-            // 平均値
+            // Average
             if (_totalLatencies.Count > 1)
             {
                 double avgTotal = Average(_totalLatencies);
-                lines.Add($"  平均: {avgTotal:F0} ms");
+                lines.Add($"Avg: {avgTotal:F0} ms");
             }
             
             latencyText.text = string.Join("\n", lines);
             
-            // 色: 緑 < 100ms, 黄 < 200ms, 赤 > 200ms
+            // Color: green < 100ms, yellow < 200ms, red > 200ms
             if (s.TotalLatency >= 0)
             {
                 if (s.TotalLatency <= 100) latencyText.color = new Color(0.4f, 1f, 0.4f);
@@ -229,7 +228,7 @@ namespace Tasks.Runner3Lane.UI
             
             if (_totalCount == 0)
             {
-                statsText.text = "[統計] データなし";
+                statsText.text = "[STATS]\nNo data";
                 statsText.color = Color.gray;
                 return;
             }
@@ -237,20 +236,20 @@ namespace Tasks.Runner3Lane.UI
             float accuracy = (float)_correctCount / _totalCount * 100f;
             
             var lines = new List<string>();
-            lines.Add("[統計]");
-            lines.Add($"  試行数: {_totalCount}");
-            lines.Add($"  正解数: {_correctCount}");
-            lines.Add($"  正解率: {accuracy:F0}%");
+            lines.Add("[STATS]");
+            lines.Add($"Trials: {_totalCount}");
+            lines.Add($"Correct: {_correctCount}");
+            lines.Add($"Acc: {accuracy:F0}%");
             
             if (_totalLatencies.Count > 0)
             {
                 double avgLat = Average(_totalLatencies);
-                lines.Add($"  平均遅延: {avgLat:F0} ms");
+                lines.Add($"AvgLat: {avgLat:F0} ms");
             }
             
             statsText.text = string.Join("\n", lines);
             
-            // 色: 緑 >= 70%, 黄 >= 50%, 赤 < 50%
+            // Color: green >= 70%, yellow >= 50%, red < 50%
             if (accuracy >= 70) statsText.color = new Color(0.4f, 1f, 0.4f);
             else if (accuracy >= 50) statsText.color = new Color(1f, 0.9f, 0.3f);
             else statsText.color = new Color(1f, 0.4f, 0.4f);
