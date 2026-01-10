@@ -80,6 +80,11 @@ namespace Tasks.Runner3Lane.UI
         
         private void OnSignalApplied(IntentSignal signal)
         {
+            // #region agent log
+            string signalDebug = $"{{\"hypothesisId\":\"D\",\"location\":\"BciLatencyDisplay:OnSignalApplied\",\"message\":\"signal_received\",\"data\":{{\"type\":\"{signal.Type}\",\"predTs\":{signal.PredictionTs},\"sendTs\":{signal.SendTs},\"recvTs\":{signal.ReceiveTs},\"applyTs\":{signal.ApplyTs},\"inferenceMs\":{signal.InferenceMs},\"trueLabel\":\"{signal.TrueLabel}\",\"trial\":{signal.TrialIdx}}},\"timestamp\":{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
+            try { System.IO.File.AppendAllText("/workspace-cloud/seiya.narukawa/intentflow/.cursor/debug.log", signalDebug + "\n"); } catch {}
+            // #endregion
+            
             _lastSignal = signal;
             _totalCount++;
             
@@ -191,6 +196,11 @@ namespace Tasks.Runner3Lane.UI
             double rawOffset = s.SendTs - s.ReceiveTs;
             if (s.ReceiveTs > 0 && s.SendTs > 0)
             {
+                // #region agent log
+                string calDebug = $"{{\"hypothesisId\":\"C\",\"location\":\"BciLatencyDisplay:191\",\"message\":\"calibration_sample\",\"data\":{{\"sampleNum\":{_clockOffsets.Count},\"rawOffset\":{rawOffset:F2},\"recv_ts\":{s.ReceiveTs},\"send_ts\":{s.SendTs}}},\"timestamp\":{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
+                try { System.IO.File.AppendAllText("/workspace-cloud/seiya.narukawa/intentflow/.cursor/debug.log", calDebug + "\n"); } catch {}
+                // #endregion
+                
                 if (!_calibratedOffset.HasValue && _clockOffsets.Count < CALIBRATION_SAMPLES)
                 {
                     _clockOffsets.Add(rawOffset);
@@ -200,6 +210,11 @@ namespace Tasks.Runner3Lane.UI
                         _clockOffsets.Sort();
                         _calibratedOffset = _clockOffsets[CALIBRATION_SAMPLES / 2];
                         Debug.Log($"[BciLatencyDisplay] Clock offset calibrated: {_calibratedOffset:F1} ms (Python ahead)");
+                        
+                        // #region agent log
+                        string calDoneDebug = $"{{\"hypothesisId\":\"C\",\"location\":\"BciLatencyDisplay:207\",\"message\":\"calibration_complete\",\"data\":{{\"finalOffset\":{_calibratedOffset.Value:F2},\"allOffsets\":\"{string.Join(",", _clockOffsets)}\"}},\"timestamp\":{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
+                        try { System.IO.File.AppendAllText("/workspace-cloud/seiya.narukawa/intentflow/.cursor/debug.log", calDoneDebug + "\n"); } catch {}
+                        // #endregion
                     }
                 }
             }
@@ -210,6 +225,15 @@ namespace Tasks.Runner3Lane.UI
             {
                 if (_calibratedOffset.HasValue)
                 {
+                    // #region agent log
+                    // DEBUG: Log all values for hypothesis testing
+                    double rawNetCalc = s.ReceiveTs - s.SendTs;
+                    double correctedRecv = s.ReceiveTs + _calibratedOffset.Value;
+                    double correctedNet = correctedRecv - s.SendTs;
+                    string debugData = $"{{\"hypothesisId\":\"A\",\"location\":\"BciLatencyDisplay:214\",\"message\":\"network_calc\",\"data\":{{\"recv_ts\":{s.ReceiveTs},\"send_ts\":{s.SendTs},\"offset\":{_calibratedOffset.Value:F2},\"rawNet\":{rawNetCalc:F2},\"correctedRecv\":{correctedRecv:F2},\"correctedNet\":{correctedNet:F2}}},\"timestamp\":{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
+                    try { System.IO.File.AppendAllText("/workspace-cloud/seiya.narukawa/intentflow/.cursor/debug.log", debugData + "\n"); } catch {}
+                    // #endregion
+                    
                     // Corrected: recv_ts + offset should be comparable to send_ts
                     networkLatency = (s.ReceiveTs + _calibratedOffset.Value) - s.SendTs;
                     // Network latency should be small positive, clamp to reasonable range
@@ -227,6 +251,11 @@ namespace Tasks.Runner3Lane.UI
             double unityProcessing = s.ApplyTs - s.ReceiveTs;
             if (s.ApplyTs > 0 && s.ReceiveTs > 0 && unityProcessing >= 0)
             {
+                // #region agent log
+                string unityDebug = $"{{\"hypothesisId\":\"E\",\"location\":\"BciLatencyDisplay:245\",\"message\":\"unity_processing\",\"data\":{{\"apply_ts\":{s.ApplyTs},\"recv_ts\":{s.ReceiveTs},\"unityProc\":{unityProcessing:F2}}},\"timestamp\":{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
+                try { System.IO.File.AppendAllText("/workspace-cloud/seiya.narukawa/intentflow/.cursor/debug.log", unityDebug + "\n"); } catch {}
+                // #endregion
+                
                 lines.Add($"Unity: {unityProcessing:F0} ms");
             }
             
@@ -251,6 +280,11 @@ namespace Tasks.Runner3Lane.UI
             if (hasTotal)
             {
                 lines.Add($"TOTAL: {totalLatency:F0} ms");
+                
+                // #region agent log
+                string totalDebug = $"{{\"hypothesisId\":\"SUMMARY\",\"location\":\"BciLatencyDisplay:TotalCalc\",\"message\":\"final_latencies\",\"data\":{{\"inference\":{s.InferenceMs:F2},\"network\":{networkLatency:F2},\"unity\":{unityProcessing:F2},\"total\":{totalLatency:F2},\"hasOffset\":{(_calibratedOffset.HasValue ? "true" : "false")}}},\"timestamp\":{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}}}";
+                try { System.IO.File.AppendAllText("/workspace-cloud/seiya.narukawa/intentflow/.cursor/debug.log", totalDebug + "\n"); } catch {}
+                // #endregion
                 
                 // Track for average (only after calibration)
                 if (_calibratedOffset.HasValue)

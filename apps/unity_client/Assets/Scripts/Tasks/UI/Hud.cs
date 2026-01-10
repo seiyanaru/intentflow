@@ -180,7 +180,7 @@ namespace Tasks.Runner3Lane.UI
                 GameState.Succeeded => successColor,
                 _ => Color.white
             };
-        }
+            }
 
         private void UpdateButtonStates(GameState state)
         {
