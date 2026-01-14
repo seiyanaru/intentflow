@@ -2,7 +2,7 @@
 dataset_name: "" 
 subject_ids: "all"
 max_epochs: 1000
-max_epochs_2b: 50
+max_epochs_2b: 500  # Fixed: was 50, now matches Base (tcformer)
 max_epochs_loso: 50
 max_epochs_loso_hgd: 50
 seed: 42
