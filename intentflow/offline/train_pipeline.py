@@ -24,21 +24,21 @@ CONFIG_DIR = Path(__file__).resolve().parent / "configs"
 
 # Main training and testing pipeline
 def train_and_test(config):
-     # Create result and checkpoints directories
+    # Create result and checkpoints directories
     model_name = config["model"]
     dataset_name = config["dataset_name"]
     
     if "results_dir" in config and config["results_dir"]:
         result_dir = Path(config["results_dir"])
     else:
-    seed = config["seed"]
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M") # Format: YYYYMMDD_HHMM (e.g., 20250517_1530)
-    aug_flag = config['preprocessing']['interaug']
-    gpu_id = config['gpu_id']
-    dir_name = "results/{}_{}_seed-{}_aug-{}_GPU{}_{}".format(
-        model_name, dataset_name, seed, aug_flag, gpu_id, timestamp
-    )
-    result_dir = Path(__file__).resolve().parent / dir_name
+        seed = config["seed"]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M") # Format: YYYYMMDD_HHMM (e.g., 20250517_1530)
+        aug_flag = config['preprocessing']['interaug']
+        gpu_id = config['gpu_id']
+        dir_name = "results/{}_{}_seed-{}_aug-{}_GPU{}_{}".format(
+            model_name, dataset_name, seed, aug_flag, gpu_id, timestamp
+        )
+        result_dir = Path(__file__).resolve().parent / dir_name
 
     result_dir.mkdir(parents=True, exist_ok=True)
     for sub in ["checkpoints", "confmats", "curves"]: (result_dir / sub).mkdir(parents=True, exist_ok=True)
@@ -225,7 +225,7 @@ def run():
     # load config
     config_path = os.path.join(CONFIG_DIR, args.model, f"{args.model}.yaml")
     if not os.path.exists(config_path):
-    config_path = os.path.join(CONFIG_DIR, f"{args.model}.yaml") 
+        config_path = os.path.join(CONFIG_DIR, f"{args.model}.yaml") 
         if not os.path.exists(config_path):
             raise FileNotFoundError(f"Config not found for model '{args.model}'. Tried: {config_path}")
              
@@ -267,7 +267,7 @@ def run():
     if args.dataset == "bcic2b":
         config["preprocessing"]["data_path"] = config.get("data_path_2b", config.get("data_path", None))
     else:
-    config["preprocessing"]["data_path"] = config.get("data_path", None)
+        config["preprocessing"]["data_path"] = config.get("data_path", None)
     # Override interaug if specified
     if args.interaug:
         config["preprocessing"]["interaug"] = True

@@ -49,7 +49,7 @@ namespace IntentFlow.Inputs.MI
         
         /// <summary>Last received intent type.</summary>
         public IntentType LastIntentType { get; private set; }
-        
+
         private IntentSignal? _pending;
         private WebSocketClient _wsClient;
         private bool _shouldReconnect = true;
@@ -293,7 +293,7 @@ namespace IntentFlow.Inputs.MI
             Confidence = 0.9f,
             Timestamp = Time.time,
         };
-        
+
         /// <summary>Intent message from Python server (protocol v3).</summary>
         [Serializable]
         private class IntentMessage
@@ -373,7 +373,7 @@ namespace IntentFlow.Inputs.MI
         private bool _isConnected;
         
         public IEnumerator Connect(string url)
-        {
+            {
             _socket = new System.Net.WebSockets.ClientWebSocket();
             _cts = new System.Threading.CancellationTokenSource();
             
