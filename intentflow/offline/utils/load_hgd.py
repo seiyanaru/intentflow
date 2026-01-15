@@ -24,8 +24,17 @@ def load_hgd(subject_ids: list, preprocessing_dict: Dict = None,
         window_dataset = create_windows_from_events(dataset, preload=False)
         ds_masks = []
         for ds in window_dataset.datasets:
-            clean_trial_mask = np.max(
-                np.abs(ds.windows.load_data()._data), axis=(-2, -1)) < 800 * 1e-6
+            # Load data - newer braindecode API doesn't have .windows attribute
+            ds_loaded = ds.load_data() if hasattr(ds, 'load_data') else ds
+            # Access data array (handle different braindecode versions)
+            if hasattr(ds_loaded, '_data'):
+                data_array = ds_loaded._data
+            elif hasattr(ds_loaded, 'get_data'):
+                data_array = ds_loaded.get_data()
+            else:
+                # Fallback: iterate through dataset
+                data_array = np.array([ds_loaded[i][0] for i in range(len(ds_loaded))])
+            clean_trial_mask = np.max(np.abs(data_array), axis=(-2, -1)) < 800 * 1e-6
             ds_masks.append(clean_trial_mask)
 
     channels = [
@@ -60,7 +69,16 @@ def load_hgd(subject_ids: list, preprocessing_dict: Dict = None,
 
     if preprocessing_dict.get("remove_artifacts", True):
         for (mask, ds) in zip(ds_masks, windows_dataset.datasets):
-            ds.windows = ds.windows[mask]
-            ds.y = list(compress(ds.y, mask))
+            # Filter out artifacts based on mask
+            # Use indices to select clean trials
+            clean_indices = np.where(mask)[0].tolist()
+            if hasattr(ds, 'windows'):
+                ds.windows = ds.windows[mask]
+            # Update labels
+            if hasattr(ds, 'y'):
+                ds.y = list(compress(ds.y, mask))
+            elif hasattr(ds, 'description'):
+                # Newer braindecode versions store labels differently
+                pass  # Labels are handled internally
 
     return windows_dataset

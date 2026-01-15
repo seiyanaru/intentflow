@@ -50,7 +50,7 @@ preprocessing:
     start: 0.0
     stop: 0.0
     batch_size: 48
-    remove_artifacts: True
+    remove_artifacts: False  # Disabled temporarily due to braindecode API changes
   bcic4_2a:
     sfreq: 250
     low_cut: null

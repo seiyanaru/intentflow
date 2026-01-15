@@ -28,15 +28,29 @@ class HighGamma(BaseDataModule):
         if self.dataset is None:
             self.prepare_data()
 
-        # split the data
+        # split the data - HGD uses "0train" and "1test" as run names
         splitted_ds = self.dataset.split("run")
-        train_dataset, test_dataset = splitted_ds["train"], splitted_ds["test"]
+        train_dataset = splitted_ds["0train"]
+        test_dataset = splitted_ds["1test"]
 
-        # load the data
-        X = train_dataset.datasets[0].windows.load_data()._data
-        y = np.array(train_dataset.datasets[0].y)
-        X_test = test_dataset.datasets[0].windows.load_data()._data
-        y_test = np.array(test_dataset.datasets[0].y)
+        # load the data - handle newer braindecode API
+        train_ds = train_dataset.datasets[0]
+        test_ds = test_dataset.datasets[0]
+        
+        # Load data (compatible with both old and new braindecode APIs)
+        if hasattr(train_ds, 'windows'):
+            X = train_ds.windows.load_data()._data
+            y = np.array(train_ds.y)
+            X_test = test_ds.windows.load_data()._data
+            y_test = np.array(test_ds.y)
+        else:
+            # Newer braindecode: iterate through dataset
+            train_ds_loaded = train_ds.load_data() if hasattr(train_ds, 'load_data') else train_ds
+            test_ds_loaded = test_ds.load_data() if hasattr(test_ds, 'load_data') else test_ds
+            X = np.array([train_ds_loaded[i][0] for i in range(len(train_ds_loaded))])
+            y = np.array([train_ds_loaded[i][1] for i in range(len(train_ds_loaded))])
+            X_test = np.array([test_ds_loaded[i][0] for i in range(len(test_ds_loaded))])
+            y_test = np.array([test_ds_loaded[i][1] for i in range(len(test_ds_loaded))])
 
         # scale data
         if self.preprocessing_dict["z_scale"]:
@@ -61,15 +75,21 @@ class HighGammaLOSO(HighGamma):
     def setup(self, stage: Optional[str] = None) -> None:
         if self.dataset is None:
             self.prepare_data()
-        # split the data
+        # split the data - HGD uses "0train" and "1test" as run names
         train_subjects = [subj for subj in self.all_subject_ids if subj != self.subject_id]
-        train_dataset = BaseConcatDataset([self.dataset.split("run")["train"].split("subject")[str(subj)] for subj in train_subjects])
-        val_dataset = BaseConcatDataset([self.dataset.split("run")["test"].split("subject")[str(subj)] for subj in train_subjects])
-        test_dataset = self.dataset.split("subject")[str(self.subject_id)].split("run")["test"]
+        train_dataset = BaseConcatDataset([self.dataset.split("run")["0train"].split("subject")[str(subj)] for subj in train_subjects])
+        val_dataset = BaseConcatDataset([self.dataset.split("run")["1test"].split("subject")[str(subj)] for subj in train_subjects])
+        test_dataset = self.dataset.split("subject")[str(self.subject_id)].split("run")["1test"]
 
-        # load the test data
-        X_test = test_dataset.datasets[0].windows.load_data()._data
-        y_test = np.array(test_dataset.datasets[0].y)
+        # load the test data - handle newer braindecode API
+        test_ds = test_dataset.datasets[0]
+        if hasattr(test_ds, 'windows'):
+            X_test = test_ds.windows.load_data()._data
+            y_test = np.array(test_ds.y)
+        else:
+            test_ds_loaded = test_ds.load_data() if hasattr(test_ds, 'load_data') else test_ds
+            X_test = np.array([test_ds_loaded[i][0] for i in range(len(test_ds_loaded))])
+            y_test = np.array([test_ds_loaded[i][1] for i in range(len(test_ds_loaded))])
 
         if self.preprocessing_dict["z_scale"]:
             for ch_idx in range(X_test.shape[1]):
@@ -112,9 +132,18 @@ class CustomDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         dataset_idx = [idx < _ for _ in self.dataset.cumulative_sizes].index(True)
-        idx = idx - self.dataset.cumulative_sizes[dataset_idx-1] if dataset_idx > 0 else idx
-        X = self.dataset.datasets[dataset_idx].windows.load_data()._data[idx]
-        y = self.dataset.datasets[dataset_idx].y[idx]
+        local_idx = idx - self.dataset.cumulative_sizes[dataset_idx-1] if dataset_idx > 0 else idx
+        
+        ds = self.dataset.datasets[dataset_idx]
+        # Handle both old and new braindecode APIs
+        if hasattr(ds, 'windows'):
+            X = ds.windows.load_data()._data[local_idx]
+            y = ds.y[local_idx]
+        else:
+            # Newer braindecode: use indexing directly
+            ds_loaded = ds.load_data() if hasattr(ds, 'load_data') else ds
+            X, y, *_ = ds_loaded[local_idx]
+        
         return torch.tensor(X, dtype=torch.float32), torch.tensor(y).type(torch.LongTensor)
 
 
