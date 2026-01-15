@@ -109,6 +109,7 @@ intentflow/
     ├─ DESIGN.md
     ├─ CALIBRATION.md
     ├─ PROTOCOL.md
+    ├─ seminar_analysis.md   ← 実験結果の詳細分析
     └─ ADR/
 ```
 
@@ -126,12 +127,24 @@ intentflow/
 3. 論文実験の再現 (Offline Experiments):
    ```bash
    # BCIC IV-2a データセットでの実験
-   ./intentflow/offline/scripts/run_paper_exp.sh --dataset bcic2a
+   python intentflow/offline/train_pipeline.py --model tcformer --dataset bcic2a --gpu_id 0
+   python intentflow/offline/train_pipeline.py --model tcformer_hybrid --dataset bcic2a --gpu_id 0
 
    # BCIC IV-2b データセットでの実験
-   ./intentflow/offline/scripts/run_paper_exp.sh --dataset bcic2b
+   python intentflow/offline/train_pipeline.py --model tcformer --dataset bcic2b --gpu_id 0 --no_interaug
+   python intentflow/offline/train_pipeline.py --model tcformer_hybrid --dataset bcic2b --gpu_id 0 --no_interaug
+
+   # HGD データセットでの実験
+   python intentflow/offline/train_pipeline.py --model tcformer --dataset hgd --gpu_id 0
+   python intentflow/offline/train_pipeline.py --model tcformer_hybrid --dataset hgd --gpu_id 0
    ```
-   ※ 結果は `intentflow/offline/results/paper_experiments/` に保存されます。
+   ※ 結果は `intentflow/offline/results/paper_experiments/{dataset}/{timestamp}/` に保存されます。
+   
+   **一括実行スクリプト:**
+   ```bash
+   ./scripts/run_bcic2b_experiments.sh 0   # GPU 0 で BCIC 2b 実験
+   ./scripts/run_hgd_experiments.sh 0      # GPU 0 で HGD 実験
+   ```
 
 4. オフライン学習 (通常):
    ```bash
@@ -157,6 +170,8 @@ intentflow/
 1. **TCFormer (Base)**: ベースとなるTemporal Convolutional Transformer。
 2. **TCFormer_TTT**: 全層を Test-Time Training (TTT) レイヤーに置き換えたモデル。
 3. **TCFormer_Hybrid**: Self-AttentionとTTT Adapterを並列配置したハイブリッドモデル。
+   - **Entropy-driven Dynamic Gating**: 予測の不確実性（エントロピー）に基づいてTTT適応強度を動的制御
+   - **2-Pass Forward**: Pass1でエントロピー計算、Pass2でTTT適応
 
 ### Hybrid Model Architecture
 ![TCFormer Hybrid Architecture](hybrid_arch.png)
@@ -164,10 +179,34 @@ intentflow/
 Hybridモデルの詳細なアーキテクチャ、数式、処理フローについては、以下のドキュメントを参照してください：
 - [**README_Hybrid.md**](intentflow/offline/README_Hybrid.md)
 
+### 実験結果サマリー
+
+#### 精度比較（3データセット）
+| Dataset | Base (TCFormer) | Hybrid (Dynamic) | 差分 |
+|---------|-----------------|------------------|------|
+| **BCIC IV 2a** | **84.67%** ± 9.25 | 83.52% ± 5.52 | -1.15% |
+| **BCIC IV 2b** | **82.67%** ± 6.73 | 80.76% ± 7.39 | -1.91% |
+| **HGD** | **92.95%** ± 7.01 | 79.29% ± 14.61 | -13.66% |
+
+#### 訓練時間比較
+| Dataset | Base | Hybrid | 短縮率 |
+|---------|------|--------|--------|
+| BCIC IV 2a | 43.3 min | 23.7 min | **1.8x** |
+| BCIC IV 2b | 131.3 min | 12.1 min | **10.9x** |
+| HGD | 212.2 min | 79.5 min | **2.7x** |
+
+#### 主な知見
+- **訓練効率**: Hybridモデルは訓練時間を大幅に短縮（最大10.9倍）
+- **安定性**: 標準偏差が改善（2a: 9.25→5.52）
+- **課題**: 高品質データ（HGD）では精度低下が顕著
+
+詳細な分析は [docs/seminar_analysis.md](docs/seminar_analysis.md) を参照。
+
 ### 実験結果の構成
 実験スクリプトを実行すると、`intentflow/offline/results/paper_experiments/{dataset}/{timestamp}/` 以下にデータが生成されます。
 - `data/`: 学習履歴、テスト結果、特徴量データ (`.json`, `.npy`, `.npz`)
 - `figures/`: 生成された図表（t-SNE, Entropy, Confusion Matrix, Learning Curves）
+- `curves/`: 被験者別の学習曲線
 
 ## 5. 設定ファイル解説
 - `configs/data.yaml`:
@@ -236,9 +275,12 @@ Acquisition → Preprocess → Inference → Stabilizer → Adapt → WS Broadca
 
 ## 9. データ管理
 - `data/raw` は Git 管理対象外（`.gitignore` 参照）。DVC や Git LFS の利用を推奨。
-- BCI Competition IV-2a/2b:
-  - `data/raw/bci_iv_2a/A01/` に `.gdf` を配置。
-  - `data/raw/bci_iv_2b/B01/` など ID ごとに整理。
+- **BCI Competition IV-2a/2b**:
+  - `data/raw/BCICIV_2a_gdf/` に `.gdf` ファイルを配置。
+  - `data/raw/BCICIV_2b_gdf/` に `.gdf` ファイルを配置。
+- **HGD (High Gamma Dataset)**:
+  - MOABB経由で自動ダウンロード（初回実行時）
+  - または手動で `data/raw/HGD/` に配置
 - 前処理後の特徴量は `data/processed`、オンライン適応ログは `data/external` を利用。
 
 ## 10. Unity/Unreal 接続
@@ -262,7 +304,26 @@ Acquisition → Preprocess → Inference → Stabilizer → Adapt → WS Broadca
 - GitHub Actions (`deployment/ci/github-actions.yml`): lint → type check → pytest の最小ワークフローを提供。
 - Dockerfile を用いて offline/online ワークロードそれぞれを再現可能にする。
 
-## 13. ライセンス/貢献/謝辞
+## 13. 今後の課題と研究方向
+
+### Hybridモデルの改善
+現在のHybridモデルには以下の課題があり、改善を進めています：
+
+1. **訓練/テスト挙動の統一**
+   - `entropy_gating_in_train: True` で訓練時もEntropy Gatingを有効化
+   
+2. **パラメータチューニング**
+   - エントロピー閾値の最適化（現在: 0.95 → 提案: 0.7）
+   - TTT学習率の低減（0.01 → 0.001）
+
+3. **データセット適応的なゲーティング**
+   - データセット特性に応じた動的な適応強度制御
+
+### 研究目標
+- 精度維持（±1%以内）+ 訓練時間3-10倍短縮
+- 国際学会投稿レベルの新規性確保
+
+## 14. ライセンス/貢献/謝辞
 - ライセンスは後日決定（暫定的に "All Rights Reserved"）。OSS 化時は Apache-2.0 を想定。
 - Issue/Pull Request での貢献歓迎。ガイドラインは今後 `CONTRIBUTING.md` へ集約予定。
 - EEG データセット提供者、オープンソース BCI コミュニティ、MI 研究コミュニティに感謝します。
