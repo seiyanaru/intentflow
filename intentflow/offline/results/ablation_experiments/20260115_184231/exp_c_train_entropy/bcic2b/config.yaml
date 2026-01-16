@@ -1,0 +1,72 @@
+data_path: /workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/
+data_path_2b: /workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2b_gdf/
+dataset_name: bcic2b
+gpu_id: 0
+max_epochs: 500
+max_epochs_2b: 500
+max_epochs_loso: 50
+max_epochs_loso_hgd: 50
+model: TCFormer_Hybrid
+model_kwargs:
+  D: 2
+  F1: 32
+  alpha_max: 0.5
+  d_group: 16
+  dropout_conv: 0.4
+  entropy_alpha_init_b: -3.0
+  entropy_alpha_init_w: 2.0
+  entropy_gating_in_train: true
+  entropy_lr_init_b: -2.0
+  entropy_lr_init_w: 2.0
+  entropy_threshold: 0.7
+  gating_mode: entropy
+  group_attn_entropy_reg: 0.0
+  hybrid_config:
+    lr: 0.1
+    ratio: 0.25
+    reg: 0.05
+  kv_heads: 4
+  lr: 0.001
+  lr_scale_max: 0.5
+  min_epochs: 20
+  patience: 10
+  pool_length_1: 8
+  pool_length_2: 7
+  q_heads: 4
+  temp_kernel_lengths:
+  - 20
+  - 32
+  - 64
+  trans_depth: 2
+  trans_dropout: 0.4
+  ttt_config:
+    base_lr: 0.1
+    layer_type: linear
+    learnable_init_state: false
+    mini_batch_size: 16
+    share_qk: false
+    ttt_anchor_scale_mode: none
+    ttt_grad_clip: 1.0
+    ttt_loss_scale: 0.1
+    ttt_reg_lambda: 0.05
+    use_dual_form: true
+  use_dynamic_gating: true
+  use_group_attn: true
+  weight_decay: 0.05
+plot_cm_average: true
+plot_cm_per_subject: true
+preprocessing:
+  batch_size: 48
+  data_path: /workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2b_gdf/
+  high_cut: null
+  interaug: false
+  low_cut: null
+  sfreq: 250
+  start: 0.0
+  stop: 3.0
+  z_scale: true
+results_dir: intentflow/offline/results/ablation_experiments/20260115_184231/exp_c_train_entropy/bcic2b
+save_checkpoint: true
+seed: 42
+subject_ids: all
+z_scale: true

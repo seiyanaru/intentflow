@@ -146,9 +146,11 @@ class HybridBlock(nn.Module):
         drop_path_rate=0.0,
         use_dynamic_gating=False,
         layer_idx: int = 0,
+        ttt_drop_prob: float = 0.0,  # Probability to drop TTT during training
     ):
         super().__init__()
         self.layer_idx = layer_idx
+        self.ttt_drop_prob = ttt_drop_prob
         self.norm1 = nn.LayerNorm(d_model)
         
         # --- Main Path: Fixed Self-Attention (普遍的な特徴抽出) ---
@@ -194,15 +196,22 @@ class HybridBlock(nn.Module):
         # 2. Adapter Path: TTT (Adaptation)
         # IMPORTANT: when enable_ttt=False (reactive 1st pass), do NOT run TTT at all.
         # TTT layers can update internal state; even alpha=0 would still adapt if we executed the adapter.
-        if enable_ttt:
+        
+        # TTT Drop: During training, randomly drop TTT with probability ttt_drop_prob
+        # This forces the model to also learn Attention-only representations
+        should_drop_ttt = False
+        if self.training and self.ttt_drop_prob > 0.0:
+            should_drop_ttt = torch.rand(1).item() < self.ttt_drop_prob
+        
+        if enable_ttt and not should_drop_ttt:
             out_ttt = self.ttt_adapter(normed_x, lr_scale=lr_scale, cache_params=cache_params)
         else:
             out_ttt = None
         
         # Integration (統合)
         # X_new = X + Attention(X) + alpha * TTT(X)
-        if not enable_ttt:
-            # Attention-only pass (for entropy computation)
+        if out_ttt is None:
+            # Attention-only pass (for entropy computation or TTT drop)
             self.last_alpha = torch.zeros(x.shape[0], device=x.device)
             x = x + self.drop_path(out_attn)
         else:
@@ -226,7 +235,7 @@ class HybridBlock(nn.Module):
         return x
 
 class HybridEncoder(nn.Module):
-    def __init__(self, d_model, trans_depth, q_heads, kv_heads, ttt_config, adapter_ratio=0.25, drop_path_max=0.25, use_dynamic_gating=False):
+    def __init__(self, d_model, trans_depth, q_heads, kv_heads, ttt_config, adapter_ratio=0.25, drop_path_max=0.25, use_dynamic_gating=False, ttt_drop_prob=0.0):
         super().__init__()
         self.d_model = d_model
         self.trans_depth = trans_depth
@@ -248,6 +257,7 @@ class HybridEncoder(nn.Module):
                 drop_path_rate=dpr[i],
                 use_dynamic_gating=use_dynamic_gating,
                 layer_idx=i,
+                ttt_drop_prob=ttt_drop_prob,  # Pass TTT drop probability
             )
             for i in range(trans_depth)
         ])
@@ -304,6 +314,7 @@ class TCFormerHybridModule(nn.Module):
         alpha_max: float = 0.5,
         lr_scale_max: float = 0.5,
         entropy_gating_in_train: bool = False,
+        ttt_drop_prob: float = 0.0,  # Probability to drop TTT during training (prevents TTT-dependency)
     ):
         super().__init__()
         
@@ -351,7 +362,8 @@ class TCFormerHybridModule(nn.Module):
             kv_heads=kv_heads,
             ttt_config=self.ttt_cfg,
             adapter_ratio=adapter_ratio,
-            use_dynamic_gating=use_dynamic_gating
+            use_dynamic_gating=use_dynamic_gating,
+            ttt_drop_prob=ttt_drop_prob,
         )
         # 3. TCN Head (Classification - 共通)
         self.tcn_head = TCNHead(
@@ -407,14 +419,31 @@ class TCFormerHybridModule(nn.Module):
         # often harming stability. Enable explicitly via entropy_gating_in_train=True.
         if self.use_dynamic_gating and self.gating_mode == "entropy" and (self.entropy_gating_in_train or (not self.training)):
             # Pass 1: Attention-only (NO TTT) to get provisional logits -> entropy
+            # NOTE: During training with entropy_gating_in_train=True, we run pass1 in eval mode
+            # to avoid dropout noise affecting entropy estimation
+            was_training = self.training
+            if was_training and self.entropy_gating_in_train:
+                self.hybrid_encoder.eval()
+                self.tcn_head.eval()
+            
             x_main = self.hybrid_encoder(x, enable_ttt=False, cache_params=cache_params)
             x_main_t = x_main.permute(0, 2, 1)  # [B,T,D] -> [B,D,T]
             with torch.no_grad():
                 logits_main = self.tcn_head(x_main_t)  # [B, n_classes]
                 p = torch.softmax(logits_main, dim=-1).clamp_min(1e-12)
-                gate_entropy = -(p * p.log()).sum(dim=-1)  # [B]
+                raw_entropy = -(p * p.log()).sum(dim=-1)  # [B]
+                # CRITICAL FIX: Normalize entropy to [0, 1] for cross-dataset compatibility
+                # max_entropy = ln(K) where K is number of classes
+                n_classes = logits_main.shape[-1]
+                max_entropy = torch.log(torch.tensor(float(n_classes), device=logits_main.device))
+                gate_entropy = raw_entropy / max_entropy  # [B], normalized to [0, 1]
 
-            # Compute alpha and lr_scale from entropy
+            # Restore training mode for pass2
+            if was_training and self.entropy_gating_in_train:
+                self.hybrid_encoder.train()
+                self.tcn_head.train()
+
+            # Compute alpha and lr_scale from normalized entropy
             alpha_1d = self.entropy_alpha_gate(gate_entropy)  # [B]
             lr_scale = self.entropy_lr_gate(gate_entropy)     # [B]
 
@@ -507,6 +536,7 @@ class TCFormerHybrid(ClassificationModule):
             alpha_max=kwargs.get("alpha_max", 0.5),
             lr_scale_max=kwargs.get("lr_scale_max", 0.5),
             entropy_gating_in_train=kwargs.get("entropy_gating_in_train", False),
+            ttt_drop_prob=kwargs.get("ttt_drop_prob", 0.0),
         )
         super().__init__(model=model, n_classes=n_classes, **kwargs)
 
