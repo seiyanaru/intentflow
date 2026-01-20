@@ -402,6 +402,28 @@ class TCFormerHybridModule(nn.Module):
         # Debug buffers for reactive gating
         self.last_gate_entropy = None   # [B]
         self.last_ttt_lr_scale = None   # [B]
+        
+        # 2-pass debug buffers (Pass 1 = attention-only)
+        self.last_logits_pass1 = None   # [B, n_classes]
+        self.last_probs_pass1 = None    # [B, n_classes]
+        self.last_preds_pass1 = None    # [B]
+        self.last_entropy_pass1 = None  # [B] (raw, not normalized)
+        self.last_pmax_pass1 = None     # [B]
+        
+        # 2-pass debug buffers (Pass 2 = with TTT)
+        self.last_logits_pass2 = None   # [B, n_classes]
+        self.last_probs_pass2 = None    # [B, n_classes]
+        self.last_preds_pass2 = None    # [B]
+        self.last_entropy_pass2 = None  # [B]
+        self.last_pmax_pass2 = None     # [B]
+        
+        # Delta metrics
+        self.last_delta_logits = None   # [B]
+        self.last_delta_kl = None       # [B]
+        
+        # Update info
+        self.last_alpha = None          # [B]
+        self.last_update_on = None      # [B] boolean
 
     def forward(self, x, cache_params: TTTCache | None = None):
         # Input: [B, C, T] or [B, 1, C, T]
@@ -437,6 +459,13 @@ class TCFormerHybridModule(nn.Module):
                 n_classes = logits_main.shape[-1]
                 max_entropy = torch.log(torch.tensor(float(n_classes), device=logits_main.device))
                 gate_entropy = raw_entropy / max_entropy  # [B], normalized to [0, 1]
+                
+                # Store Pass 1 debug info
+                self.last_logits_pass1 = logits_main.detach()
+                self.last_probs_pass1 = p.detach()
+                self.last_preds_pass1 = logits_main.argmax(dim=-1).detach()
+                self.last_entropy_pass1 = raw_entropy.detach()
+                self.last_pmax_pass1 = p.max(dim=-1).values.detach()  # [B]
 
             # Restore training mode for pass2
             if was_training and self.entropy_gating_in_train:
@@ -450,6 +479,8 @@ class TCFormerHybridModule(nn.Module):
             # Debug buffers
             self.last_gate_entropy = gate_entropy.detach()
             self.last_ttt_lr_scale = lr_scale.detach()
+            self.last_alpha = alpha_1d.detach()  # [B]
+            self.last_update_on = (alpha_1d > 0).detach()  # [B] boolean mask
 
             # Pass 2: Run full hybrid with externally supplied alpha and lr_scale
             gate_alpha = alpha_1d.view(-1, 1, 1)
@@ -458,12 +489,45 @@ class TCFormerHybridModule(nn.Module):
             # Legacy path (feature-stats gating or static scale)
             self.last_gate_entropy = None
             self.last_ttt_lr_scale = None
+            self.last_logits_pass1 = None
+            self.last_probs_pass1 = None
+            self.last_preds_pass1 = None
+            self.last_entropy_pass1 = None
+            self.last_pmax_pass1 = None
+            self.last_alpha = None
+            self.last_update_on = None
             x = self.hybrid_encoder(x, cache_params=cache_params)
 
         x = x.permute(0, 2, 1) # [B, T, D] -> [B, D, T]
         
         # 3. Classification
         logits = self.tcn_head(x)
+        
+        # ── Compute Pass 2 debug info & delta metrics (for 2-pass analysis) ──
+        if self.last_logits_pass1 is not None:
+            with torch.no_grad():
+                # Pass 2 info
+                p2 = torch.softmax(logits, dim=-1).clamp_min(1e-12)
+                self.last_logits_pass2 = logits.detach()
+                self.last_probs_pass2 = p2.detach()
+                self.last_preds_pass2 = logits.argmax(dim=-1).detach()
+                self.last_entropy_pass2 = -(p2 * p2.log()).sum(dim=-1).detach()  # [B]
+                self.last_pmax_pass2 = p2.max(dim=-1).values.detach()  # [B]
+                
+                # Delta metrics
+                self.last_delta_logits = (logits - self.last_logits_pass1).norm(dim=-1).detach()  # [B]
+                # KL(p1 || p2) per sample
+                p1 = self.last_probs_pass1.clamp_min(1e-12)
+                self.last_delta_kl = (p1 * (p1.log() - p2.log())).sum(dim=-1).detach()  # [B]
+        else:
+            self.last_logits_pass2 = None
+            self.last_probs_pass2 = None
+            self.last_preds_pass2 = None
+            self.last_entropy_pass2 = None
+            self.last_pmax_pass2 = None
+            self.last_delta_logits = None
+            self.last_delta_kl = None
+        
         return logits
 
     def get_debug_batch(self):
@@ -472,7 +536,7 @@ class TCFormerHybridModule(nn.Module):
         This is used by ClassificationModule.test_step to save small json stats.
         """
         dbg = {
-            "alpha": getattr(self.hybrid_encoder, "last_alpha", None),
+            "alpha": getattr(self, "last_alpha", None),  # Use self.last_alpha from forward
             "gate_entropy": getattr(self, "last_gate_entropy", None),
             "ttt_lr_scale": getattr(self, "last_ttt_lr_scale", None),
             "clip_ratio": None,
@@ -481,6 +545,28 @@ class TCFormerHybridModule(nn.Module):
             "conv_norm_post": getattr(self.conv_block, "last_conv_norm_post", None),
             "group_attn_gamma": getattr(self.conv_block, "last_group_attn_gamma", None),
             "group_attn_temperature": getattr(getattr(self.conv_block, "group_attn", None), "last_temperature", None),
+            
+            # ── 2-pass debug info ──
+            # Pass 1 (attention-only)
+            "logits_pass1": getattr(self, "last_logits_pass1", None),
+            "probs_pass1": getattr(self, "last_probs_pass1", None),
+            "preds_pass1": getattr(self, "last_preds_pass1", None),
+            "entropy_pass1": getattr(self, "last_entropy_pass1", None),
+            "pmax_pass1": getattr(self, "last_pmax_pass1", None),
+            
+            # Pass 2 (with TTT)
+            "logits_pass2": getattr(self, "last_logits_pass2", None),
+            "probs_pass2": getattr(self, "last_probs_pass2", None),
+            "preds_pass2": getattr(self, "last_preds_pass2", None),
+            "entropy_pass2": getattr(self, "last_entropy_pass2", None),
+            "pmax_pass2": getattr(self, "last_pmax_pass2", None),
+            
+            # Delta metrics
+            "delta_logits": getattr(self, "last_delta_logits", None),
+            "delta_kl": getattr(self, "last_delta_kl", None),
+            
+            # Update info
+            "update_on": getattr(self, "last_update_on", None),  # boolean [B]
         }
 
         # Clip ratio: average across layers (if available)

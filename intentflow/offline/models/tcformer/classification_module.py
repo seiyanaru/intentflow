@@ -92,6 +92,21 @@ class ClassificationModule(pl.LightningModule):
         self.test_ttt_effective_base_lr = []
         self.test_group_attn_temperature = []
         
+        # ── 2-pass debug stats (Pass 1 = attention-only, Pass 2 = with TTT) ──
+        self.test_preds_pass1 = []       # Pass 1 predictions
+        self.test_probs_pass1 = []       # Pass 1 probabilities
+        self.test_entropy_pass1 = []     # Pass 1 entropy (raw)
+        self.test_logits_pass1 = []      # Pass 1 logits
+        self.test_pmax_pass1 = []        # Pass 1 max probability
+        self.test_preds_pass2 = []       # Pass 2 predictions (final)
+        self.test_entropy_pass2 = []     # Pass 2 entropy
+        self.test_pmax_pass2 = []        # Pass 2 max probability
+        self.test_correct_pass1 = []     # Whether Pass 1 was correct
+        self.test_correct_pass2 = []     # Whether Pass 2 was correct
+        self.test_delta_logits = []      # ||logits_pass2 - logits_pass1||
+        self.test_delta_kl = []          # KL(p_pass1 || p_pass2)
+        self.test_update_on = []         # Whether TTT was applied (alpha > 0)
+        
         # Register hook to capture features from the layer before classification
         if hasattr(self.model, 'tcn_head'):
             if hasattr(self.model.tcn_head, 'classifier'):
@@ -226,6 +241,43 @@ class ClassificationModule(pl.LightningModule):
                 self.test_group_attn_gamma.append(float(dbg["group_attn_gamma"]))
             if dbg.get("group_attn_temperature") is not None:
                 self.test_group_attn_temperature.append(float(dbg["group_attn_temperature"]))
+            
+            # ── 2-pass debug info (Pass 1 = attention-only, Pass 2 = with TTT) ──
+            if dbg.get("preds_pass1") is not None:
+                preds_pass1 = dbg["preds_pass1"].detach().cpu()
+                self.test_preds_pass1.append(preds_pass1)
+                self.test_preds_pass2.append(preds)  # Pass 2 is the final prediction
+                
+                # Compute correctness for flip analysis
+                correct_pass1 = (preds_pass1 == y.cpu())
+                correct_pass2 = (preds == y)
+                self.test_correct_pass1.append(correct_pass1)
+                self.test_correct_pass2.append(correct_pass2.cpu())
+                
+            if dbg.get("probs_pass1") is not None:
+                self.test_probs_pass1.append(dbg["probs_pass1"].detach().cpu())
+            if dbg.get("entropy_pass1") is not None:
+                self.test_entropy_pass1.append(dbg["entropy_pass1"].detach().cpu())
+            if dbg.get("logits_pass1") is not None:
+                self.test_logits_pass1.append(dbg["logits_pass1"].detach().cpu())
+            if dbg.get("pmax_pass1") is not None:
+                self.test_pmax_pass1.append(dbg["pmax_pass1"].detach().cpu())
+            
+            # Pass 2 additional info
+            if dbg.get("entropy_pass2") is not None:
+                self.test_entropy_pass2.append(dbg["entropy_pass2"].detach().cpu())
+            if dbg.get("pmax_pass2") is not None:
+                self.test_pmax_pass2.append(dbg["pmax_pass2"].detach().cpu())
+            
+            # Delta metrics
+            if dbg.get("delta_logits") is not None:
+                self.test_delta_logits.append(dbg["delta_logits"].detach().cpu())
+            if dbg.get("delta_kl") is not None:
+                self.test_delta_kl.append(dbg["delta_kl"].detach().cpu())
+            
+            # Update info
+            if dbg.get("update_on") is not None:
+                self.test_update_on.append(dbg["update_on"].detach().cpu())
 
         return {"test_loss": loss, "test_acc": acc}
 
@@ -346,6 +398,209 @@ class ClassificationModule(pl.LightningModule):
             if self.test_group_attn_temperature:
                 debug["group_attn_temperature_last"] = float(self.test_group_attn_temperature[-1])
 
+            # ── 2-pass flip analysis (comprehensive) ──────────────────────────
+            if self.test_correct_pass1 and self.test_correct_pass2:
+                correct_p1 = torch.cat(self.test_correct_pass1, dim=0).numpy()
+                correct_p2 = torch.cat(self.test_correct_pass2, dim=0).numpy()
+                n_samples = len(correct_p1)
+                
+                # Flip analysis
+                flip_to_correct = (~correct_p1) & correct_p2  # was wrong, now correct
+                flip_to_wrong = correct_p1 & (~correct_p2)    # was correct, now wrong
+                stayed_correct = correct_p1 & correct_p2
+                stayed_wrong = (~correct_p1) & (~correct_p2)
+                
+                tpa = {
+                    "n_samples": n_samples,
+                    "acc_pass1": float(correct_p1.mean()),
+                    "acc_pass2": float(correct_p2.mean()),
+                    "acc_change": float(correct_p2.mean() - correct_p1.mean()),
+                    "n_flip_to_correct": int(flip_to_correct.sum()),
+                    "n_flip_to_wrong": int(flip_to_wrong.sum()),
+                    "n_stayed_correct": int(stayed_correct.sum()),
+                    "n_stayed_wrong": int(stayed_wrong.sum()),
+                    "flip_to_correct_ratio": float(flip_to_correct.mean()),
+                    "flip_to_wrong_ratio": float(flip_to_wrong.mean()),
+                    "net_flip": int(flip_to_correct.sum() - flip_to_wrong.sum()),
+                }
+                
+                # Entropy analysis by flip status
+                if self.test_entropy_pass1:
+                    entropy_p1 = torch.cat(self.test_entropy_pass1, dim=0).numpy()
+                    tpa["entropy_pass1_mean"] = float(entropy_p1.mean())
+                    tpa["entropy_pass1_std"] = float(entropy_p1.std())
+                    
+                    # Entropy by flip status
+                    if flip_to_correct.sum() > 0:
+                        tpa["entropy_p1_flip_to_correct"] = float(entropy_p1[flip_to_correct].mean())
+                    if flip_to_wrong.sum() > 0:
+                        tpa["entropy_p1_flip_to_wrong"] = float(entropy_p1[flip_to_wrong].mean())
+                    if stayed_correct.sum() > 0:
+                        tpa["entropy_p1_stayed_correct"] = float(entropy_p1[stayed_correct].mean())
+                    if stayed_wrong.sum() > 0:
+                        tpa["entropy_p1_stayed_wrong"] = float(entropy_p1[stayed_wrong].mean())
+                
+                if self.test_entropy_pass2:
+                    entropy_p2 = torch.cat(self.test_entropy_pass2, dim=0).numpy()
+                    tpa["entropy_pass2_mean"] = float(entropy_p2.mean())
+                    tpa["entropy_pass2_std"] = float(entropy_p2.std())
+                    
+                    # Delta entropy
+                    if self.test_entropy_pass1:
+                        delta_entropy = entropy_p2 - entropy_p1
+                        tpa["delta_entropy_mean"] = float(delta_entropy.mean())
+                        if flip_to_correct.sum() > 0:
+                            tpa["delta_entropy_flip_to_correct"] = float(delta_entropy[flip_to_correct].mean())
+                        if flip_to_wrong.sum() > 0:
+                            tpa["delta_entropy_flip_to_wrong"] = float(delta_entropy[flip_to_wrong].mean())
+                
+                # pmax analysis
+                if self.test_pmax_pass1:
+                    pmax_p1 = torch.cat(self.test_pmax_pass1, dim=0).numpy()
+                    tpa["pmax_pass1_mean"] = float(pmax_p1.mean())
+                    if flip_to_correct.sum() > 0:
+                        tpa["pmax_p1_flip_to_correct"] = float(pmax_p1[flip_to_correct].mean())
+                    if flip_to_wrong.sum() > 0:
+                        tpa["pmax_p1_flip_to_wrong"] = float(pmax_p1[flip_to_wrong].mean())
+                
+                if self.test_pmax_pass2:
+                    pmax_p2 = torch.cat(self.test_pmax_pass2, dim=0).numpy()
+                    tpa["pmax_pass2_mean"] = float(pmax_p2.mean())
+                
+                # Alpha/lr_scale analysis by flip status
+                if self.test_alpha:
+                    alpha_all = torch.cat(self.test_alpha, dim=0).numpy()
+                    tpa["alpha_mean"] = float(alpha_all.mean())
+                    if flip_to_correct.sum() > 0:
+                        tpa["alpha_flip_to_correct"] = float(alpha_all[flip_to_correct].mean())
+                    if flip_to_wrong.sum() > 0:
+                        tpa["alpha_flip_to_wrong"] = float(alpha_all[flip_to_wrong].mean())
+                    if stayed_correct.sum() > 0:
+                        tpa["alpha_stayed_correct"] = float(alpha_all[stayed_correct].mean())
+                    if stayed_wrong.sum() > 0:
+                        tpa["alpha_stayed_wrong"] = float(alpha_all[stayed_wrong].mean())
+                
+                # Delta metrics (how much the output changed)
+                if self.test_delta_logits:
+                    delta_logits = torch.cat(self.test_delta_logits, dim=0).numpy()
+                    tpa["delta_logits_mean"] = float(delta_logits.mean())
+                    tpa["delta_logits_p50"] = float(np.percentile(delta_logits, 50))
+                    tpa["delta_logits_p90"] = float(np.percentile(delta_logits, 90))
+                    if flip_to_correct.sum() > 0:
+                        tpa["delta_logits_flip_to_correct"] = float(delta_logits[flip_to_correct].mean())
+                    if flip_to_wrong.sum() > 0:
+                        tpa["delta_logits_flip_to_wrong"] = float(delta_logits[flip_to_wrong].mean())
+                    if stayed_correct.sum() > 0:
+                        tpa["delta_logits_stayed_correct"] = float(delta_logits[stayed_correct].mean())
+                    if stayed_wrong.sum() > 0:
+                        tpa["delta_logits_stayed_wrong"] = float(delta_logits[stayed_wrong].mean())
+                
+                if self.test_delta_kl:
+                    delta_kl = torch.cat(self.test_delta_kl, dim=0).numpy()
+                    tpa["delta_kl_mean"] = float(delta_kl.mean())
+                    tpa["delta_kl_p50"] = float(np.percentile(delta_kl, 50))
+                    tpa["delta_kl_p90"] = float(np.percentile(delta_kl, 90))
+                    if flip_to_correct.sum() > 0:
+                        tpa["delta_kl_flip_to_correct"] = float(delta_kl[flip_to_correct].mean())
+                    if flip_to_wrong.sum() > 0:
+                        tpa["delta_kl_flip_to_wrong"] = float(delta_kl[flip_to_wrong].mean())
+                
+                # Update analysis (what % of samples actually had TTT applied)
+                if self.test_update_on:
+                    update_on = torch.cat(self.test_update_on, dim=0).numpy()
+                    tpa["update_ratio"] = float(update_on.mean())
+                    tpa["n_updated"] = int(update_on.sum())
+                    tpa["n_not_updated"] = int((~update_on).sum())
+                    
+                    # Accuracy split by update status
+                    if update_on.sum() > 0:
+                        tpa["acc_pass1_when_updated"] = float(correct_p1[update_on].mean())
+                        tpa["acc_pass2_when_updated"] = float(correct_p2[update_on].mean())
+                        tpa["acc_change_when_updated"] = float(correct_p2[update_on].mean() - correct_p1[update_on].mean())
+                    if (~update_on).sum() > 0:
+                        tpa["acc_pass1_when_not_updated"] = float(correct_p1[~update_on].mean())
+                        tpa["acc_pass2_when_not_updated"] = float(correct_p2[~update_on].mean())
+                
+                debug["two_pass_analysis"] = tpa
+
+            # ── Save 2-pass sample-level data (comprehensive) ──────────────────
+            if self.test_preds_pass1 and self.test_preds_pass2:
+                twopass_samples = []
+                preds_p1 = torch.cat(self.test_preds_pass1, dim=0).numpy()
+                preds_p2 = torch.cat(self.test_preds_pass2, dim=0).numpy()
+                labels = torch.cat(self.test_labels, dim=0).numpy() if self.test_labels else None
+                
+                # Optional arrays
+                probs_p1 = torch.cat(self.test_probs_pass1, dim=0).numpy() if self.test_probs_pass1 else None
+                entropy_p1 = torch.cat(self.test_entropy_pass1, dim=0).numpy() if self.test_entropy_pass1 else None
+                entropy_p2 = torch.cat(self.test_entropy_pass2, dim=0).numpy() if self.test_entropy_pass2 else None
+                pmax_p1 = torch.cat(self.test_pmax_pass1, dim=0).numpy() if self.test_pmax_pass1 else None
+                pmax_p2 = torch.cat(self.test_pmax_pass2, dim=0).numpy() if self.test_pmax_pass2 else None
+                alpha_all = torch.cat(self.test_alpha, dim=0).numpy() if self.test_alpha else None
+                lr_scale_all = torch.cat(self.test_ttt_lr_scale, dim=0).numpy() if self.test_ttt_lr_scale else None
+                delta_logits_all = torch.cat(self.test_delta_logits, dim=0).numpy() if self.test_delta_logits else None
+                delta_kl_all = torch.cat(self.test_delta_kl, dim=0).numpy() if self.test_delta_kl else None
+                update_on_all = torch.cat(self.test_update_on, dim=0).numpy() if self.test_update_on else None
+                
+                for i in range(len(preds_p1)):
+                    sample = {
+                        "idx": i,
+                        "pred_pass1": int(preds_p1[i]),
+                        "pred_pass2": int(preds_p2[i]),
+                    }
+                    if labels is not None:
+                        sample["true_label"] = int(labels[i])
+                        sample["correct_pass1"] = bool(preds_p1[i] == labels[i])
+                        sample["correct_pass2"] = bool(preds_p2[i] == labels[i])
+                        # Determine flip status
+                        c1, c2 = sample["correct_pass1"], sample["correct_pass2"]
+                        if not c1 and c2:
+                            sample["flip_status"] = "flip_to_correct"
+                        elif c1 and not c2:
+                            sample["flip_status"] = "flip_to_wrong"
+                        elif c1 and c2:
+                            sample["flip_status"] = "stayed_correct"
+                        else:
+                            sample["flip_status"] = "stayed_wrong"
+                    
+                    # Pass 1 info
+                    if entropy_p1 is not None:
+                        sample["entropy_pass1"] = float(entropy_p1[i])
+                    if pmax_p1 is not None:
+                        sample["pmax_pass1"] = float(pmax_p1[i])
+                    if probs_p1 is not None:
+                        sample["probs_pass1"] = [float(p) for p in probs_p1[i]]
+                    
+                    # Pass 2 info
+                    if entropy_p2 is not None:
+                        sample["entropy_pass2"] = float(entropy_p2[i])
+                    if pmax_p2 is not None:
+                        sample["pmax_pass2"] = float(pmax_p2[i])
+                    
+                    # Gating info
+                    if alpha_all is not None:
+                        sample["alpha"] = float(alpha_all[i])
+                    if lr_scale_all is not None:
+                        sample["lr_scale"] = float(lr_scale_all[i])
+                    if update_on_all is not None:
+                        sample["update_on"] = bool(update_on_all[i])
+                    
+                    # Delta metrics
+                    if delta_logits_all is not None:
+                        sample["delta_logits"] = float(delta_logits_all[i])
+                    if delta_kl_all is not None:
+                        sample["delta_kl"] = float(delta_kl_all[i])
+                    if entropy_p1 is not None and entropy_p2 is not None:
+                        sample["delta_entropy"] = float(entropy_p2[i] - entropy_p1[i])
+                    if pmax_p1 is not None and pmax_p2 is not None:
+                        sample["delta_pmax"] = float(pmax_p2[i] - pmax_p1[i])
+                    
+                    twopass_samples.append(sample)
+                
+                twopass_path = os.path.join(self.results_dir, f"twopass_s{self.subject_id}_{self.model_name}.json")
+                with open(twopass_path, "w") as f:
+                    json.dump(twopass_samples, f, indent=2)
+
             if debug:
                 debug_path = os.path.join(self.results_dir, f"debug_s{self.subject_id}_{self.model_name}.json")
                 with open(debug_path, "w") as f:
@@ -363,6 +618,20 @@ class ClassificationModule(pl.LightningModule):
             self.test_conv_norm_post = []
             self.test_group_attn_gamma = []
             self.test_group_attn_temperature = []
+            # 2-pass buffers
+            self.test_preds_pass1 = []
+            self.test_probs_pass1 = []
+            self.test_entropy_pass1 = []
+            self.test_logits_pass1 = []
+            self.test_pmax_pass1 = []
+            self.test_preds_pass2 = []
+            self.test_entropy_pass2 = []
+            self.test_pmax_pass2 = []
+            self.test_correct_pass1 = []
+            self.test_correct_pass2 = []
+            self.test_delta_logits = []
+            self.test_delta_kl = []
+            self.test_update_on = []
 
     def predict_step(self, batch, batch_idx, dataloader_idx=0):
         x, _ = batch
