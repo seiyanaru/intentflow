@@ -315,6 +315,7 @@ class TCFormerHybridModule(nn.Module):
         lr_scale_max: float = 0.5,
         entropy_gating_in_train: bool = False,
         ttt_drop_prob: float = 0.0,  # Probability to drop TTT during training (prevents TTT-dependency)
+        pmax_threshold: float = 1.0,  # Only apply TTT when pmax < this value (1.0 = no filtering)
     ):
         super().__init__()
         
@@ -400,6 +401,7 @@ class TCFormerHybridModule(nn.Module):
             self.entropy_lr_gate = None
 
         # Debug buffers for reactive gating
+        self.pmax_threshold = pmax_threshold  # Only apply TTT when pmax < this value
         self.last_gate_entropy = None   # [B]
         self.last_ttt_lr_scale = None   # [B]
         
@@ -475,6 +477,13 @@ class TCFormerHybridModule(nn.Module):
             # Compute alpha and lr_scale from normalized entropy
             alpha_1d = self.entropy_alpha_gate(gate_entropy)  # [B]
             lr_scale = self.entropy_lr_gate(gate_entropy)     # [B]
+
+            # Apply pmax filter: only adapt when model is uncertain (pmax < threshold)
+            pmax = p.max(dim=-1).values  # [B]
+            if self.pmax_threshold < 1.0:
+                pmax_mask = (pmax < self.pmax_threshold).to(alpha_1d.dtype)  # [B]
+                alpha_1d = alpha_1d * pmax_mask
+                lr_scale = lr_scale * pmax_mask
 
             # Debug buffers
             self.last_gate_entropy = gate_entropy.detach()

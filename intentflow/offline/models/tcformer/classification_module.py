@@ -246,7 +246,7 @@ class ClassificationModule(pl.LightningModule):
             if dbg.get("preds_pass1") is not None:
                 preds_pass1 = dbg["preds_pass1"].detach().cpu()
                 self.test_preds_pass1.append(preds_pass1)
-                self.test_preds_pass2.append(preds)  # Pass 2 is the final prediction
+                self.test_preds_pass2.append(preds.cpu())  # Pass 2 is the final prediction
                 
                 # Compute correctness for flip analysis
                 correct_pass1 = (preds_pass1 == y.cpu())

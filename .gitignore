@@ -37,6 +37,16 @@ logs/
 *.ckpt
 *.parquet
 
+# Experiment results (too large to track)
+intentflow/offline/results/
+intentflow/offline/experiment_log.txt
+intentflow/offline/fig*/
+results/
+
+# Generated images (regenerate as needed)
+scripts/*.png
+scripts/*.pdf
+
 # Misc
 .DS_Store
 Thumbs.db
@@ -48,3 +58,4 @@ Thumbs.db
 !data/external/.gitkeep
 
 playground/TCFormer/
+
