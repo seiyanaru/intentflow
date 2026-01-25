@@ -35,7 +35,7 @@ preprocessing:
     low_cut: 4
     high_cut: null
     start: 0.0
-    stop: 0.0
+    stop: 4.0
     batch_size: 48
     remove_artifacts: False
 

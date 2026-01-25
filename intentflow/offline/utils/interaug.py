@@ -7,7 +7,13 @@ def interaug(batch):
     new_samples = torch.zeros_like(x)
     new_labels = torch.zeros_like(y)
     current = 0
-    n_chunks = 9 if new_samples.shape[-1] == 1125 else (8 if new_samples.shape[-1] % 8 == 0 else 7) # special case for BCIC III
+    # BCIC 2b (750 samples) -> 750/6 = 125 samples/chunk (matches 1000/8=125)
+    if new_samples.shape[-1] == 750:
+        n_chunks = 6
+    elif new_samples.shape[-1] == 1125:
+        n_chunks = 9
+    else:
+        n_chunks = 8 if new_samples.shape[-1] % 8 == 0 else 7 # special case for BCIC III
     for cls in torch.unique(y):
         x_cls = x[y == cls]
         chunks = torch.cat(torch.chunk(x_cls, chunks=n_chunks, dim=-1))

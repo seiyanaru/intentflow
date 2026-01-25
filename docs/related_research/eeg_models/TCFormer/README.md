@@ -8,7 +8,11 @@
 - **コード**: https://github.com/altaheri/TCFormer
 
 ## 概要
-**Multi-kernel CNN + Transformer + TCN** を統合したEEG運動イメージ分類モデル。BCIC IV-2a で 84.79% の精度を達成（SOTA）。
+**Multi-kernel CNN + Transformer + TCN** を統合したEEG運動イメージ分類モデル。
+主な実績（論文値）:
+- **BCIC IV-2a**: 84.79% (SOTA)
+- **BCIC IV-2b**: 85.54% (Acc) / 0.71 (Kappa)
+- **HGD**: 93.8% (Acc)
 
 ## アーキテクチャ
 
