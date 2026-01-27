@@ -332,6 +332,7 @@ class TCFormerOTTA(ClassificationModule):
                 'adapted': torch.tensor(result['adapted']).repeat(len(x)), # Broadcast boolean
                 'adapt_weight': result['adapt_weight'].cpu(),
                 'pred': result['pred'].cpu(),
+                'original_pred': result['original_pred'].cpu(),
                 'label': y.cpu(),
             })
         else:
@@ -374,6 +375,7 @@ class TCFormerOTTA(ClassificationModule):
             adapted = torch.cat([x['adapted'] for x in self.test_otta_stats], dim=0).numpy()
             adapt_weight = torch.cat([x['adapt_weight'] for x in self.test_otta_stats], dim=0).numpy()
             pred = torch.cat([x['pred'] for x in self.test_otta_stats], dim=0).numpy()
+            original_pred = torch.cat([x['original_pred'] for x in self.test_otta_stats], dim=0).numpy()
             label = torch.cat([x['label'] for x in self.test_otta_stats], dim=0).numpy()
             
             np.savez(
@@ -383,6 +385,7 @@ class TCFormerOTTA(ClassificationModule):
                 adapted=adapted,
                 adapt_weight=adapt_weight,
                 pred=pred,
+                original_pred=original_pred,
                 label=label
             )
             print(f"[TCFormerOTTA] Saved OTTA stats to {stats_path}")

@@ -3,7 +3,7 @@
 
 # general
 dataset_name: ""
-subject_ids: "all"
+subject_ids: [6]
 max_epochs: 500
 max_epochs_2b: 500
 max_epochs_loso: 125

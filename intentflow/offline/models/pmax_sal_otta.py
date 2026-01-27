@@ -332,6 +332,8 @@ class PmaxSAL_OTTA(nn.Module):
         
         # Step 5: Adaptation (if enabled)
         adapted = False
+        original_pred = pred.clone() # Save original prediction
+        
         if self.enable_adaptation and should_adapt.any():
             # Get samples to adapt
             adapt_mask = should_adapt
@@ -359,7 +361,8 @@ class PmaxSAL_OTTA(nn.Module):
         
         result = {
             'logits': logits,
-            'pred': pred,
+            'pred': pred, # Final prediction
+            'original_pred': original_pred, # Pre-adaptation prediction
             'pmax': pmax,
             'sal': sal,
             'adapted': adapted,
@@ -371,6 +374,7 @@ class PmaxSAL_OTTA(nn.Module):
             result['stats'] = self.adaptation_stats.copy()
         
         return result
+
     
     def reset_stats(self):
         """Reset adaptation statistics."""
