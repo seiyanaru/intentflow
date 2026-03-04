@@ -34,6 +34,11 @@ class TCFormerOTTAModule(pl.LightningModule):
         # OTTA parameters
         pmax_threshold: float = 0.7,
         sal_threshold: float = 0.5,
+        energy_threshold: Optional[float] = None,
+        energy_quantile: float = 0.95,
+        energy_temperature: float = 1.0,
+        neuro_beta: float = 0.1,
+        strict_tri_lock: bool = True,
         enable_otta: bool = True,
         # TCFormer parameters  
         F1: int = 32,
@@ -81,6 +86,11 @@ class TCFormerOTTAModule(pl.LightningModule):
         self.enable_otta = enable_otta
         self.pmax_threshold = pmax_threshold
         self.sal_threshold = sal_threshold
+        self.energy_threshold = energy_threshold
+        self.energy_quantile = energy_quantile
+        self.energy_temperature = energy_temperature
+        self.neuro_beta = neuro_beta
+        self.strict_tri_lock = strict_tri_lock
         
         # Training parameters
         self.lr = lr
@@ -176,6 +186,11 @@ class TCFormerOTTAModule(pl.LightningModule):
                 n_classes=self.n_classes,
                 pmax_threshold=self.pmax_threshold,
                 sal_threshold=self.sal_threshold,
+                energy_threshold=self.energy_threshold,
+                energy_quantile=self.energy_quantile,
+                energy_temperature=self.energy_temperature,
+                neuro_beta=self.neuro_beta,
+                strict_tri_lock=self.strict_tri_lock,
                 enable_adaptation=True,
             )
             
@@ -267,6 +282,11 @@ class TCFormerOTTA(ClassificationModule):
         # Extract OTTA-specific args
         pmax_threshold = kwargs.pop('pmax_threshold', 0.7)
         sal_threshold = kwargs.pop('sal_threshold', 0.5)
+        energy_threshold = kwargs.pop('energy_threshold', None)
+        energy_quantile = kwargs.pop('energy_quantile', 0.95)
+        energy_temperature = kwargs.pop('energy_temperature', 1.0)
+        neuro_beta = kwargs.pop('neuro_beta', 0.1)
+        strict_tri_lock = kwargs.pop('strict_tri_lock', True)
         enable_otta = kwargs.pop('enable_otta', True)
         
         # Create base TCFormer
@@ -290,6 +310,11 @@ class TCFormerOTTA(ClassificationModule):
         # Store OTTA config
         self.pmax_threshold = pmax_threshold
         self.sal_threshold = sal_threshold
+        self.energy_threshold = energy_threshold
+        self.energy_quantile = energy_quantile
+        self.energy_temperature = energy_temperature
+        self.neuro_beta = neuro_beta
+        self.strict_tri_lock = strict_tri_lock
         self.enable_otta = enable_otta
         self.otta = None
         self.train_dataloader_ref = None
@@ -308,6 +333,11 @@ class TCFormerOTTA(ClassificationModule):
                 n_classes=self.n_classes,
                 pmax_threshold=self.pmax_threshold,
                 sal_threshold=self.sal_threshold,
+                energy_threshold=self.energy_threshold,
+                energy_quantile=self.energy_quantile,
+                energy_temperature=self.energy_temperature,
+                neuro_beta=self.neuro_beta,
+                strict_tri_lock=self.strict_tri_lock,
                 enable_adaptation=True,
             )
             
@@ -374,6 +404,8 @@ class TCFormerOTTA(ClassificationModule):
             }
             if 'neuro_score' in result and result['neuro_score'] is not None:
                 entry['neuro_score'] = result['neuro_score'].cpu()
+            if 'energy_score' in result and result['energy_score'] is not None:
+                entry['energy_score'] = result['energy_score'].cpu()
             
             self.test_otta_stats.append(entry)
         else:
@@ -435,6 +467,15 @@ class TCFormerOTTA(ClassificationModule):
             if 'neuro_score' in self.test_otta_stats[0]:
                  neuro_score = torch.cat([x['neuro_score'] for x in self.test_otta_stats], dim=0).numpy()
                  save_dict['neuro_score'] = neuro_score
+            if any('energy_score' in x for x in self.test_otta_stats):
+                energy_parts = []
+                for x in self.test_otta_stats:
+                    if 'energy_score' in x:
+                        energy_parts.append(x['energy_score'])
+                    else:
+                        energy_parts.append(torch.full_like(x['pmax'], float("nan")))
+                energy_score = torch.cat(energy_parts, dim=0).numpy()
+                save_dict['energy_score'] = energy_score
             
             np.savez(stats_path, **save_dict)
             print(f"[TCFormerOTTA] Saved OTTA stats to {stats_path}")

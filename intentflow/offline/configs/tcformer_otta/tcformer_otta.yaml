@@ -75,6 +75,11 @@ model_kwargs:
   # OTTA Adaptation Parameters (NEW)
   pmax_threshold: 0.7      # Threshold for pmax confidence
   sal_threshold: 0.5       # Threshold for Source Alignment Level
+  neuro_beta: 0.1          # Conservative gating strength (raise thresholds when Neuro-Z < 0)
+  energy_threshold: null   # If null, calibrated from source quantile below
+  energy_quantile: 0.95    # Source energy quantile used when energy_threshold is null
+  energy_temperature: 1.0  # Temperature for energy score E(x) = -T*logsumexp(logits/T)
+  strict_tri_lock: true    # Require pmax + sal + energy gates simultaneously
   enable_otta: true        # Enable/disable adaptation
 
 save_checkpoint: True

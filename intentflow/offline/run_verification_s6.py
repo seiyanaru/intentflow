@@ -63,7 +63,7 @@ def run_s1():
     # Printing config for debug
     print(f"Dataset Name: {config['dataset_name']}")
     
-    print(">>> Running Verification Experiment for Subject 1 (Neuro-Gated OTTA Phase 7) <<<")
+    print(">>> Running Verification Experiment for Subject 1 (Neuro-Gated OTTA / Dual Gating) <<<")
     train_and_test(config)
 
 if __name__ == "__main__":

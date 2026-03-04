@@ -14,7 +14,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, Optional, Tuple
-import copy
 
 
 class OnlineNormalizer(nn.Module):
@@ -103,6 +102,11 @@ class PmaxSAL_OTTA(nn.Module):
         n_classes: int = 4,
         pmax_threshold: float = 0.7,
         sal_threshold: float = 0.5,
+        energy_threshold: Optional[float] = None,
+        energy_quantile: float = 0.95,
+        energy_temperature: float = 1.0,
+        neuro_beta: float = 0.1,
+        strict_tri_lock: bool = True,
         alpha: float = 0.5,  # Weight between pmax and SAL
         bn_momentum: float = 0.1,  # BN stats update momentum
         enable_adaptation: bool = True,
@@ -126,11 +130,16 @@ class PmaxSAL_OTTA(nn.Module):
         self.alpha = alpha
         self.bn_momentum = bn_momentum
         self.enable_adaptation = enable_adaptation
+        self.fixed_energy_threshold = None if energy_threshold is None else float(energy_threshold)
+        self.energy_quantile = float(energy_quantile)
+        self.energy_temperature = float(energy_temperature)
+        self.strict_tri_lock = bool(strict_tri_lock)
         
         # Source prototypes: [n_classes, feature_dim]
         # Will be computed during training
         self.register_buffer('source_prototypes', None)
         self.register_buffer('prototype_counts', torch.zeros(n_classes))
+        self.register_buffer('source_energy_threshold', torch.tensor(float("nan")))
         
         # Store source BN statistics
         self.source_bn_stats = {}
@@ -144,10 +153,10 @@ class PmaxSAL_OTTA(nn.Module):
         
         # Neuro-Gated OTTA config
         self.channel_roles = None
-        self.neuro_factor = 50.0 # Deprecated in Phase 7, kept for compatibility if needed
-        self.neuro_beta = 5.0   # Strong Conservative Gating (Was 0.1)
+        self.neuro_factor = 50.0 # Legacy parameter, kept for compatibility
+        self.neuro_beta = float(neuro_beta)
         
-        # Phase 7: Online Normalizer
+        # Online Neuro-Score normalizer
         # Warmup steps set to 0 to allow adaptation from Batch 1
         self.normalizer = OnlineNormalizer(momentum=0.1, warmup_steps=0)
         
@@ -157,7 +166,13 @@ class PmaxSAL_OTTA(nn.Module):
             'adapted_samples': 0,
             'skipped_overconfident': 0,
             'skipped_unreliable': 0,
+            'skipped_energy': 0,
         }
+        self._last_gate_info = {}
+        self._warned_no_prototypes = False
+        self._warned_no_features = False
+        self._warned_no_energy_threshold = False
+        self._warned_missing_energy = False
 
     def set_channel_roles(self, roles: Dict[str, list]):
         """Set channel roles (motor/noise indices) for Neuro-Gating."""
@@ -203,7 +218,12 @@ class PmaxSAL_OTTA(nn.Module):
         # Find the last layer before classifier
         # For TCFormer, this is typically the pooling layer output
         def hook_fn(module, input, output):
-            if isinstance(output, tuple):
+            # Prefer classifier input (penultimate feature) over output logits.
+            if isinstance(input, tuple) and len(input) > 0 and torch.is_tensor(input[0]):
+                self._features = input[0]
+            elif torch.is_tensor(input):
+                self._features = input
+            elif isinstance(output, tuple):
                 self._features = output[0]
             else:
                 self._features = output
@@ -263,9 +283,10 @@ class PmaxSAL_OTTA(nn.Module):
         
         self.model.eval()
         
-        # Accumulate features per class
+        # Accumulate features per class and energy scores
         feature_sums = {}
         feature_counts = {}
+        source_energies = []
         
         with torch.no_grad():
             for batch in dataloader:
@@ -297,7 +318,32 @@ class PmaxSAL_OTTA(nn.Module):
                             feature_counts[label] = 0
                         feature_sums[label] += feat_vec
                         feature_counts[label] += 1
+                        
+                # Compute and store energy for the batch
+                batch_energy = self.compute_energy(logits, self.energy_temperature)
+                source_energies.append(batch_energy.cpu())
         
+        # Compute statistical energy threshold from source domain.
+        if source_energies:
+            all_energies = torch.cat(source_energies)
+            if self.fixed_energy_threshold is not None:
+                th = torch.tensor(self.fixed_energy_threshold, device=device)
+                src = "fixed"
+            else:
+                q = min(max(self.energy_quantile, 0.0), 1.0)
+                th = torch.quantile(all_energies.to(device), q)
+                src = f"quantile={q:.2f}"
+            self.source_energy_threshold.copy_(th.detach())
+            print(
+                "[PmaxSAL] Computed Energy Threshold: "
+                f"{self.source_energy_threshold.item():.4f} ({src}, T={self.energy_temperature:.2f})"
+            )
+        
+        if not feature_sums:
+            self.source_prototypes = None
+            print("[PmaxSAL] Warning: no source features captured. SAL gate will remain closed.")
+            return
+
         # Compute mean prototypes
         feature_dim = next(iter(feature_sums.values())).shape[0]
         prototypes = torch.zeros(self.n_classes, feature_dim, device=device)
@@ -325,6 +371,22 @@ class PmaxSAL_OTTA(nn.Module):
         pmax, pred = probs.max(dim=-1)
         return pmax, pred
     
+    def compute_energy(self, logits: torch.Tensor, T: float = 1.0) -> torch.Tensor:
+        """
+        Compute Energy Score for Statistical Gating (In-Distribution check).
+        Lower energy = In-Distribution. Higher = Out-of-Distribution.
+        """
+        energy = -T * torch.logsumexp(logits / T, dim=1)
+        return energy
+
+    def _resolve_energy_threshold(self, device: torch.device) -> Optional[torch.Tensor]:
+        """Resolve runtime energy threshold with priority: fixed > calibrated."""
+        if self.fixed_energy_threshold is not None:
+            return torch.tensor(self.fixed_energy_threshold, device=device)
+        if torch.isfinite(self.source_energy_threshold).item():
+            return self.source_energy_threshold.to(device)
+        return None
+        
     def compute_sal(
         self,
         features: torch.Tensor,
@@ -343,8 +405,11 @@ class PmaxSAL_OTTA(nn.Module):
             sal: Source Alignment Level [B]
         """
         if self.source_prototypes is None:
-            # No prototypes available, return high SAL to enable adaptation
-            return torch.ones(features.shape[0], device=features.device)
+            # Fail-safe: No prototypes -> block adaptation path.
+            if not self._warned_no_prototypes:
+                print("[PmaxSAL] Warning: source prototypes unavailable. Forcing SAL=0.")
+                self._warned_no_prototypes = True
+            return torch.zeros(features.shape[0], device=features.device)
         
         # Normalize features
         features = F.normalize(features, p=2, dim=1)
@@ -361,16 +426,16 @@ class PmaxSAL_OTTA(nn.Module):
         self,
         pmax: torch.Tensor,
         sal: torch.Tensor,
-        neuro_score: Optional[torch.Tensor] = None
+        neuro_score: Optional[torch.Tensor] = None,
+        energy: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Compute gating decision based on pmax and SAL, optionally modulated by Neuro-Score.
+        Compute gating decision based on confidence, physiological, and statistical gates.
         
-        Gating Logic:
-        - High pmax + High SAL → adapt_weight = 1.0
-        - High pmax + Low SAL  → adapt_weight = 0.0 (overconfident)
-        - Low pmax + High SAL  → adapt_weight = 0.5 (cautious)
-        - Low pmax + Low SAL   → adapt_weight = 0.0 (unreliable)
+        Tri-lock (strict mode):
+        - pmax > dynamic pmax_th
+        - sal > dynamic sal_th
+        - energy <= energy_th
         
         Neuro-Gating Modifier:
         - If Neuro-Score is High (Motor focus): Lower thresholds (encourage adapt)
@@ -381,79 +446,66 @@ class PmaxSAL_OTTA(nn.Module):
             adapt_weight: Weight for adaptation [B]
         """
         
-        # Dynamic Thresholding
-        pmax_th = self.pmax_threshold
-        sal_th = self.sal_threshold
-        
-        # Phase 7: Online Z-score Normalization + Conservative Gating
-        
-        # Ensure pmax_th/sal_th are tensors on correct device
-        if not torch.is_tensor(self.pmax_threshold):
-                base_pmax = torch.tensor(self.pmax_threshold, device=pmax.device)
-        else:
-                base_pmax = self.pmax_threshold.to(pmax.device)
-        
-        if not torch.is_tensor(self.sal_threshold):
-                base_sal = torch.tensor(self.sal_threshold, device=sal.device)
-        else:
-                base_sal = self.sal_threshold.to(sal.device)
-        
-        # Normalize Score
+        base_pmax = torch.tensor(self.pmax_threshold, device=pmax.device)
+        base_sal = torch.tensor(self.sal_threshold, device=sal.device)
+
+        # Conservative neuro gating: raise thresholds only on negative Z.
+        if neuro_score is None:
+            neuro_score = torch.zeros_like(pmax)
         z_score, is_warmed_up = self.normalizer(neuro_score)
-        
-        # Conservative Gating Logic: 
-        # Only INCREASE threshold if Z is negative (bad state).
-        # Modifier = beta * ReLU(-z)
-        # If Z > 0 (Good), Modifier = 0 -> Threshold stays at base (Optimum)
-        # If Z < 0 (Bad), Modifier > 0 -> Threshold increases -> Block adaptation
-        
-        negative_z = F.relu(-z_score) # Positive only if Z is negative
+        negative_z = F.relu(-z_score)
         modifier = self.neuro_beta * negative_z
-        
         pmax_th = base_pmax + modifier
         sal_th = base_sal + modifier
-        
-        # Safety Clamp for Thresholds explanation:
-        # We allow thresholds to go up to 1.0 (impossible to pass), but base shouldn't go below initial.
-        # So clamp min is base (implied by logic) or explicit.
-        # Max clamp 1.1 ensures we can block completely.
-        # DEBUG
-        if torch.rand(1).item() < 0.05: # Print occasionally
-            print(f"[DEBUG-Cons] Beta={self.neuro_beta}, Z_mean={z_score.mean().item():.2f}, Mod_mean={modifier.mean().item():.4f}")
-            
-        # Handle Warm-up: If not warmed up, force thresholds to be very high
+
+        if torch.rand(1).item() < 0.05:
+            print(
+                "[DEBUG-Cons] "
+                f"Beta={self.neuro_beta}, Z_mean={z_score.mean().item():.2f}, "
+                f"Mod_mean={modifier.mean().item():.4f}"
+            )
+
+        # Optional warm-up lock.
         if not is_warmed_up:
             pmax_th = torch.ones_like(pmax_th) * 1.1
             sal_th = torch.ones_like(sal_th) * 1.1
-            
-        else:
-            pmax_th = torch.tensor(pmax_th, device=pmax.device)
-            sal_th = torch.tensor(sal_th, device=sal.device)
 
         high_pmax = pmax > pmax_th
         high_sal = sal > sal_th
-        
-        # Initialize weights
-        adapt_weight = torch.zeros_like(pmax)
-        
-        # Case 1: High pmax + High SAL → Full adaptation
-        mask1 = high_pmax & high_sal
-        adapt_weight[mask1] = 1.0
-        
-        # Case 2: High pmax + Low SAL → Skip (overconfident)
-        mask2 = high_pmax & ~high_sal
-        adapt_weight[mask2] = 0.0
-        
-        # Case 3: Low pmax + High SAL → Cautious adaptation
-        mask3 = ~high_pmax & high_sal
-        adapt_weight[mask3] = 0.5
-        
-        # Case 4: Low pmax + Low SAL → Skip (unreliable)
-        mask4 = ~high_pmax & ~high_sal
-        adapt_weight[mask4] = 0.0
-        
-        should_adapt = adapt_weight > 0
-        
+
+        # Statistical gate.
+        energy_th = self._resolve_energy_threshold(pmax.device)
+        if energy is None:
+            safe_energy = torch.zeros_like(high_pmax, dtype=torch.bool)
+            if not self._warned_missing_energy:
+                print("[PmaxSAL] Warning: energy score missing. Blocking adaptation.")
+                self._warned_missing_energy = True
+        elif energy_th is None:
+            safe_energy = torch.zeros_like(high_pmax, dtype=torch.bool)
+            if not self._warned_no_energy_threshold:
+                print("[PmaxSAL] Warning: energy threshold unavailable. Blocking adaptation.")
+                self._warned_no_energy_threshold = True
+        else:
+            safe_energy = energy <= energy_th
+
+        # Tri-lock by default.
+        if self.strict_tri_lock:
+            should_adapt = high_pmax & high_sal & safe_energy
+            adapt_weight = should_adapt.to(pmax.dtype)
+        else:
+            adapt_weight = torch.zeros_like(pmax)
+            mask1 = high_pmax & high_sal & safe_energy
+            mask3 = ~high_pmax & high_sal & safe_energy
+            adapt_weight[mask1] = 1.0
+            adapt_weight[mask3] = 0.5
+            should_adapt = adapt_weight > 0
+
+        self._last_gate_info = {
+            "high_pmax": high_pmax,
+            "high_sal": high_sal,
+            "safe_energy": safe_energy,
+            "energy_th": energy_th,
+        }
         return should_adapt, adapt_weight
     
     def forward(
@@ -511,7 +563,13 @@ class PmaxSAL_OTTA(nn.Module):
              if len(features.shape) == 3 and features.shape[2] == 1:
                  features = features.squeeze(2)
         
-        sal = self.compute_sal(features, pred) if features is not None else pmax.clone()
+        if features is not None:
+            sal = self.compute_sal(features, pred)
+        else:
+            if not self._warned_no_features:
+                print("[PmaxSAL] Warning: features unavailable. Forcing SAL=0.")
+                self._warned_no_features = True
+            sal = torch.zeros_like(pmax)
         
         # Step 3.5: Compute Neuro-Score
         neuro_score = self.compute_neuro_score(att_weights) # [B]
@@ -520,8 +578,11 @@ class PmaxSAL_OTTA(nn.Module):
         if neuro_score.ndim == 0:
              neuro_score = neuro_score.unsqueeze(0).repeat(pmax.shape[0])
         
-        # Step 4: Gating decision (with Neuro-Score)
-        should_adapt, adapt_weight = self.compute_gate(pmax, sal, neuro_score)
+        # Step 3.8: Compute Energy Score (Statistical Gate)
+        energy = self.compute_energy(logits, self.energy_temperature)
+        
+        # Step 4: Gating decision (with Neuro-Score and Energy)
+        should_adapt, adapt_weight = self.compute_gate(pmax, sal, neuro_score, energy)
         
         # Step 5: Adaptation (if enabled)
         adapted_flag = False # Internal Batch Flag
@@ -543,6 +604,11 @@ class PmaxSAL_OTTA(nn.Module):
             pass
         
         self.adaptation_stats['total_samples'] += x.shape[0]
+        gate = self._last_gate_info
+        if gate:
+            self.adaptation_stats['skipped_overconfident'] += (gate["high_pmax"] & ~gate["high_sal"]).sum().item()
+            self.adaptation_stats['skipped_unreliable'] += (~gate["high_pmax"]).sum().item()
+            self.adaptation_stats['skipped_energy'] += (gate["high_pmax"] & gate["high_sal"] & ~gate["safe_energy"]).sum().item()
         
         # Step 6: Final forward with potentially updated BN
         if adapted_flag:
@@ -557,6 +623,7 @@ class PmaxSAL_OTTA(nn.Module):
             'pmax': pmax,
             'sal': sal,
             'neuro_score': neuro_score, # Log this!
+            'energy_score': energy,
             'adapted': should_adapt.detach().cpu(), # Return mask on CPU
             'adapt_weight': adapt_weight,
         }
@@ -577,6 +644,7 @@ class PmaxSAL_OTTA(nn.Module):
             'adapted_samples': 0,
             'skipped_overconfident': 0,
             'skipped_unreliable': 0,
+            'skipped_energy': 0,
         }
     
     def get_adaptation_rate(self) -> float:
@@ -595,9 +663,11 @@ class PmaxSAL_OTTA(nn.Module):
         adapted = self.adaptation_stats['adapted_samples']
         overconf = self.adaptation_stats['skipped_overconfident']
         unreliable = self.adaptation_stats['skipped_unreliable']
+        skipped_energy = self.adaptation_stats['skipped_energy']
         
         print(f"[PmaxSAL] Adaptation Statistics:")
         print(f"  Total samples: {total}")
         print(f"  Adapted: {adapted} ({100*adapted/total:.1f}%)")
         print(f"  Skipped (overconfident): {overconf} ({100*overconf/total:.1f}%)")
         print(f"  Skipped (unreliable): {unreliable} ({100*unreliable/total:.1f}%)")
+        print(f"  Skipped (energy gate): {skipped_energy} ({100*skipped_energy/total:.1f}%)")

@@ -3,6 +3,7 @@ import glob
 import os
 import torch
 
+
 class VirtualOnlineNormalizer:
     def __init__(self, momentum=0.1):
         self.momentum = momentum
@@ -26,11 +27,11 @@ class VirtualOnlineNormalizer:
         z = np.clip(z, -3.0, 3.0)
         return z
 
-def simulate_phase7():
+def simulate_conservative_neuro_gating():
     results_dir = "intentflow/offline/results/tcformer_otta_bcic2a_seed-0_aug-True_GPU0_20260129_2126" # Hardcoded latest
     files = sorted(glob.glob(os.path.join(results_dir, "otta_stats_s*_tcformer_otta.npz")))
     
-    print("=== Virtual Phase 7 Simulation (Warmup=0) ===")
+    print("=== Virtual Neuro-Conservative Gating Simulation (Warmup=0) ===")
     
     total_samples = 0
     total_flips = 0
@@ -61,18 +62,16 @@ def simulate_phase7():
             # 1. Normalize
             z_scores = normalizer.forward(batch_ns)
             
-            # 2. Threshold
-            # pmax_th = 0.7, sal_th = 0.5, beta = 0.1
+            # 2. Threshold (aligned with Conservative Neuro-Gating in pmax_sal_otta.py)
             base_sal_th = 0.5
             beta = 0.1
             
-            tanh_z = np.tanh(z_scores)
-            modifier = beta * tanh_z
+            negative_z = np.maximum(-z_scores, 0) # ReLU(-Z)
+            modifier = beta * negative_z
             
-            dynamic_th = base_sal_th - modifier
-            dynamic_th = np.clip(dynamic_th, 0.3, 0.9)
+            dynamic_th = base_sal_th + modifier
             
-            # 3. Gating
+            # 3. Gating (SAL-only approximation; full model also checks Pmax and Energy)
             should_adapt = batch_sal > dynamic_th
             
             subject_flips += np.sum(should_adapt)
@@ -86,5 +85,6 @@ def simulate_phase7():
 
     print(f"Overall Virtual Flip Rate: {(total_flips/total_samples)*100:.2f}%")
 
+
 if __name__ == "__main__":
-    simulate_phase7()
+    simulate_conservative_neuro_gating()

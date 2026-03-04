@@ -94,7 +94,8 @@ def debug_otta(
         # --- BASELINE EVALUATION (No OTTA) ---
         print(f"[DebugOTTA] Evaluating Baseline (No OTTA)...")
         model.enable_otta = False # Disable OTTA
-        model.otta.enable_adaptation = False
+        if hasattr(model, 'otta'):
+            model.otta.enable_adaptation = False
         
         trainer_base = Trainer(accelerator=accelerator, devices=devices, logger=False, enable_checkpointing=False)
         base_results = trainer_base.test(model, datamodule=datamodule, verbose=False)
@@ -108,7 +109,8 @@ def debug_otta(
         train_loader = datamodule.train_dataloader()
         model.train_dataloader_ref = train_loader
         model.enable_otta = True
-        model.otta.enable_adaptation = True
+        if hasattr(model, 'otta'):
+            model.otta.enable_adaptation = True
         
         # 4. Trainer
         trainer = Trainer(

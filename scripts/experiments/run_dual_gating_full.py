@@ -1,8 +1,6 @@
-
 import os
 import yaml
 import sys
-from pathlib import Path
 from datetime import datetime
 
 # Ensure local imports work same as train_pipeline.py
@@ -12,7 +10,7 @@ sys.path.append(os.path.join(PROJECT_ROOT, "intentflow/offline"))
 
 from train_pipeline import train_and_test, CONFIG_DIR
 
-def run_full_experiment():
+def run_dual_gating_full_experiment():
     model_name = "tcformer_otta"
     dataset_name = "bcic2a"
     
@@ -36,15 +34,16 @@ def run_full_experiment():
 
     # Set Results Directory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-    results_dir_name = f"phase7_conservative_{timestamp}"
+    results_dir_name = f"dual_gating_full_{timestamp}"
     config["results_dir"] = os.path.join(PROJECT_ROOT, "intentflow/offline/results", results_dir_name)
     
     config["gpu_id"] = 0
     
-    print(f">>> Starting Phase 7 Full Experiment (Subjects 1-9) <<<")
+    print(">>> Starting Dual-Gating Full Experiment (Subjects 1-9) <<<")
     print(f"Results will be saved to: {config['results_dir']}")
     
     train_and_test(config)
 
+
 if __name__ == "__main__":
-    run_full_experiment()
+    run_dual_gating_full_experiment()
