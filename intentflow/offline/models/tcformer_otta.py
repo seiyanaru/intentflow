@@ -382,6 +382,10 @@ class TCFormerOTTA(ClassificationModule):
                     self.train_dataloader_ref,
                     device=self.device
                 )
+
+    def set_train_dataloader(self, dataloader):
+        """Set training dataloader for source prototype/energy calibration."""
+        self.train_dataloader_ref = dataloader
     
     def test_step(self, batch, batch_idx):
         """Override test step to use OTTA."""
