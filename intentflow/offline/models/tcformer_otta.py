@@ -16,6 +16,7 @@ import numpy as np
 from models.tcformer.tcformer import TCFormer as TCFormerBase
 from models.tcformer.classification_module import ClassificationModule
 from models.pmax_sal_otta import PmaxSAL_OTTA
+from utils.montage_mapper import get_electrode_roles
 
 
 class TCFormerOTTAModule(pl.LightningModule):
@@ -231,7 +232,7 @@ class TCFormerOTTAModule(pl.LightningModule):
         
         
         # Calculate Kappa
-        kappa = self.test_kappa(all_preds, all_labels)
+        kappa = self.test_kappa(all_preds, all_labels) if hasattr(self, 'test_kappa') else 0.0
         
         acc = all_correct.mean().item()
         
@@ -310,6 +311,42 @@ class TCFormerOTTA(ClassificationModule):
                 enable_adaptation=True,
             )
             
+            # Setup Neuro-Gating (Automated Montage Mapping)
+            try:
+                # Try to get channel names from datamodule -> test_set
+                datamodule = getattr(self.trainer, 'datamodule', None)
+                
+                if datamodule:
+                     ch_names = None
+                     # Config 1: Direct attribute on test_set (Mock / Custom)
+                     if hasattr(datamodule, 'test_set') and hasattr(datamodule.test_set, 'ch_names'):
+                          ch_names = datamodule.test_set.ch_names
+                     # Config 2: Attribute on dataset_test
+                     elif hasattr(datamodule, 'dataset_test') and hasattr(datamodule.dataset_test, 'ch_names'):
+                          ch_names = datamodule.dataset_test.ch_names
+                     # Config 3: Braindecode BaseConcatDataset in datamodule.dataset
+                     elif hasattr(datamodule, 'dataset') and hasattr(datamodule.dataset, 'datasets'):
+                          # Access first run/dataset
+                          ds = datamodule.dataset.datasets[0]
+                          if hasattr(ds, 'ch_names'):
+                              ch_names = ds.ch_names
+                          elif hasattr(ds, 'raw') and hasattr(ds.raw, 'ch_names'):
+                              ch_names = ds.raw.ch_names
+                          elif hasattr(ds, 'windows') and hasattr(ds.windows, 'ch_names'):
+                              ch_names = ds.windows.ch_names
+                     
+                     if ch_names:
+                        roles = get_electrode_roles(ch_names)
+                        self.otta.set_channel_roles(roles)
+                        print(f"[TCFormerOTTA] Neuro-Gating enabled. Motor channels: {len(roles['motor'])}, Noise channels: {len(roles['noise'])}")
+                     else:
+                        print("[TCFormerOTTA] Warning: No channel names found in datamodule. Neuro-Gating disabled.")
+                        # Fallback for BCIC 2a if known?
+                        # Hardcoding fallback is risky if dataset matches but montage doesn't.
+                        # Better to rely on dynamic retrieval.
+            except Exception as e:
+                print(f"[TCFormerOTTA] Warning: Failed to setup Neuro-Gating roles: {e}")
+            
             if self.train_dataloader_ref is not None:
                 self.otta.compute_source_prototypes(
                     self.train_dataloader_ref,
@@ -326,15 +363,19 @@ class TCFormerOTTA(ClassificationModule):
             preds = result['pred']
             
             # Store OTTA stats for analysis
-            self.test_otta_stats.append({
+            entry = {
                 'pmax': result['pmax'].cpu(),
                 'sal': result['sal'].cpu(),
-                'adapted': torch.tensor(result['adapted']).repeat(len(x)), # Broadcast boolean
+                'adapted': result['adapted'], # Already CPU tensor [B]
                 'adapt_weight': result['adapt_weight'].cpu(),
                 'pred': result['pred'].cpu(),
                 'original_pred': result['original_pred'].cpu(),
                 'label': y.cpu(),
-            })
+            }
+            if 'neuro_score' in result and result['neuro_score'] is not None:
+                entry['neuro_score'] = result['neuro_score'].cpu()
+            
+            self.test_otta_stats.append(entry)
         else:
             logits = self.forward(x)
             preds = logits.argmax(dim=-1)
@@ -344,18 +385,21 @@ class TCFormerOTTA(ClassificationModule):
         acc = (preds == y).float().mean()
         
         # IMPORTANT: Update metric objects
-        self.test_kappa.update(preds, y)
-        self.test_cm.update(preds, y)
+        if hasattr(self, 'test_kappa'):
+             self.test_kappa.update(preds, y)
+        if hasattr(self, 'test_cm'):
+            self.test_cm.update(preds, y)
         
         # Log metrics (on_epoch=True adds them to valid/test results dict)
         self.log('test_loss', loss, prog_bar=True, on_step=False, on_epoch=True)
         self.log('test_acc', acc, prog_bar=True, on_step=False, on_epoch=True)
-        self.log('test_kappa', self.test_kappa, prog_bar=False, on_step=False, on_epoch=True)
+        if hasattr(self, 'test_kappa'):
+             self.log('test_kappa', self.test_kappa, prog_bar=False, on_step=False, on_epoch=True)
         
         # Store for analysis (needed by ClassificationModule.on_test_epoch_end)
-        if self.test_logits:
+        if self.test_logits is not None:
              self.test_logits.append(logits.detach().cpu())
-        if self.test_labels:
+        if self.test_labels is not None:
              self.test_labels.append(y.detach().cpu())
         
         return {'test_loss': loss, 'test_acc': acc}
@@ -363,7 +407,7 @@ class TCFormerOTTA(ClassificationModule):
     def on_test_epoch_end(self):
         """Save OTTA statistics."""
         # 1. Save detailed OTTA stats
-        if self.test_otta_stats and self.subject_id != "unknown":
+        if self.test_otta_stats and hasattr(self, 'subject_id') and self.subject_id != "unknown":
             import os
             import numpy as np
             os.makedirs(self.results_dir, exist_ok=True)
@@ -378,20 +422,23 @@ class TCFormerOTTA(ClassificationModule):
             original_pred = torch.cat([x['original_pred'] for x in self.test_otta_stats], dim=0).numpy()
             label = torch.cat([x['label'] for x in self.test_otta_stats], dim=0).numpy()
             
-            np.savez(
-                stats_path,
-                pmax=pmax,
-                sal=sal,
-                adapted=adapted,
-                adapt_weight=adapt_weight,
-                pred=pred,
-                original_pred=original_pred,
-                label=label
-            )
+            # neuro_score (might not exist in all if added later)
+            save_dict = {
+                'pmax': pmax,
+                'sal': sal,
+                'adapted': adapted,
+                'adapt_weight': adapt_weight,
+                'pred': pred,
+                'original_pred': original_pred,
+                'label': label
+            }
+            if 'neuro_score' in self.test_otta_stats[0]:
+                 neuro_score = torch.cat([x['neuro_score'] for x in self.test_otta_stats], dim=0).numpy()
+                 save_dict['neuro_score'] = neuro_score
+            
+            np.savez(stats_path, **save_dict)
             print(f"[TCFormerOTTA] Saved OTTA stats to {stats_path}")
             self.test_otta_stats = []
             
         # 2. Call parent's logic
         super().on_test_epoch_end()
-        
-

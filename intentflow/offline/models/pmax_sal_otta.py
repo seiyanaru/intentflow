@@ -17,6 +17,75 @@ from typing import Dict, Optional, Tuple
 import copy
 
 
+class OnlineNormalizer(nn.Module):
+    """
+    Robust Online Normalizer with 3-Lock Strategy.
+    1. Prior Init
+    2. Warm-up
+    3. Safety Clamp
+    """
+    def __init__(self, momentum: float = 0.1, warmup_steps: int = 20):
+        super().__init__()
+        self.momentum = momentum
+        self.warmup_steps = warmup_steps
+        
+        # 1. Prior Initialization (from S1 stats: mean~0.0, std~0.01)
+        self.register_buffer('running_mean', torch.tensor(0.0))
+        self.register_buffer('running_var', torch.tensor(0.0001)) # std=0.01 -> var=0.0001
+        self.register_buffer('count', torch.tensor(0))
+        
+        # Logging stats
+        self.last_z = 0.0
+        self.last_mean = 0.0
+        self.last_std = 0.0
+        
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, bool]:
+        """
+        Update stats and normalize input.
+        Args:
+            x: Input tensor (batch of scores) [B]
+            
+        Returns:
+            z: Normalized scores
+            is_warmed_up: Boolean indicating if warm-up is complete
+        """
+        # Batch stats
+        if x.numel() > 1:
+            batch_mean = x.mean()
+            batch_var = x.var(unbiased=False)
+        else:
+            batch_mean = x.mean()
+            batch_var = torch.tensor(0.0, device=x.device)
+            
+        # Update running stats (Exponential Moving Average)
+        # Handle first update differently if needed, but Prior Init makes it easier.
+        if self.training or True: # Always update in TTA
+             self.running_mean = (1 - self.momentum) * self.running_mean + self.momentum * batch_mean
+             # Correct variance update usually involves mean shift, but simple EMA on var is approx OK for streaming
+             self.running_var = (1 - self.momentum) * self.running_var + self.momentum * batch_var
+
+        self.count += 1
+        is_warmed_up = self.count > self.warmup_steps
+        
+        # 2. Warm-up (Force stats update but invalid z output? Or just return z but flag as not ready?)
+        # We will return z, but the caller should check is_warmed_up.
+        
+        # Compute Z-score
+        # 3. Safety Clamp (Safe division)
+        std = torch.sqrt(self.running_var + 1e-6)
+        z = (x - self.running_mean) / std
+        
+        # 3. Safety Clamp (Clip Z)
+        z = torch.clamp(z, -3.0, 3.0)
+        
+        # Update logs
+        self.last_z = z.mean().item()
+        self.last_mean = self.running_mean.item()
+        self.last_std = std.item()
+
+        return z, is_warmed_up
+
+
 class PmaxSAL_OTTA(nn.Module):
     """
     Pmax-SAL Gated Online Test-Time Adaptation Module
@@ -71,6 +140,17 @@ class PmaxSAL_OTTA(nn.Module):
         self._features = None
         self._register_feature_hook()
         
+        self.class_probs = []
+        
+        # Neuro-Gated OTTA config
+        self.channel_roles = None
+        self.neuro_factor = 50.0 # Deprecated in Phase 7, kept for compatibility if needed
+        self.neuro_beta = 5.0   # Strong Conservative Gating (Was 0.1)
+        
+        # Phase 7: Online Normalizer
+        # Warmup steps set to 0 to allow adaptation from Batch 1
+        self.normalizer = OnlineNormalizer(momentum=0.1, warmup_steps=0)
+        
         # Statistics for logging
         self.adaptation_stats = {
             'total_samples': 0,
@@ -78,6 +158,45 @@ class PmaxSAL_OTTA(nn.Module):
             'skipped_overconfident': 0,
             'skipped_unreliable': 0,
         }
+
+    def set_channel_roles(self, roles: Dict[str, list]):
+        """Set channel roles (motor/noise indices) for Neuro-Gating."""
+        self.channel_roles = roles
+        print(f"[PmaxSAL] Neuro-Gating enabled: {len(roles['motor'])} Motor, {len(roles['noise'])} Noise channels.")
+
+    def compute_neuro_score(self, weights: torch.Tensor) -> torch.Tensor:
+        """
+        Compute Neuro-Score based on attention weights of Motor vs Noise channels.
+        
+        Args:
+            weights: Channel attention weights [B, C]
+            
+        Returns:
+            neuro_score: Score in [-1, 1] range. [B]
+                         Positive -> Motor focus (Trustworthy)
+                         Negative -> Noise focus (Artifact)
+        """
+        if self.channel_roles is None or weights is None:
+            # Return scalar 0.0 tensor, correct device handling tricky if weights=None
+            device = self.prototype_counts.device
+            return torch.tensor(0.0, device=device)
+
+        motor_idx = self.channel_roles.get('motor', [])
+        noise_idx = self.channel_roles.get('noise', [])
+        
+        if not motor_idx:
+            return torch.zeros(weights.shape[0], device=weights.device)
+            
+        # Extract weights
+        motor_w = weights[:, motor_idx].mean(dim=1) if motor_idx else torch.zeros(weights.shape[0], device=weights.device)
+        noise_w = weights[:, noise_idx].mean(dim=1) if noise_idx else torch.zeros(weights.shape[0], device=weights.device)
+        
+        # Calculate score: (Motor - Noise) / (Motor + Noise + epsilon)
+        # This normalizes the score to [-1, 1] relative to the total attention on these groups
+        total = motor_w + noise_w + 1e-6
+        score = (motor_w - noise_w) / total
+        
+        return score
     
     def _register_feature_hook(self):
         """Register hook to capture features before final classifier."""
@@ -241,10 +360,11 @@ class PmaxSAL_OTTA(nn.Module):
     def compute_gate(
         self,
         pmax: torch.Tensor,
-        sal: torch.Tensor
+        sal: torch.Tensor,
+        neuro_score: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Compute gating decision based on pmax and SAL.
+        Compute gating decision based on pmax and SAL, optionally modulated by Neuro-Score.
         
         Gating Logic:
         - High pmax + High SAL → adapt_weight = 1.0
@@ -252,12 +372,66 @@ class PmaxSAL_OTTA(nn.Module):
         - Low pmax + High SAL  → adapt_weight = 0.5 (cautious)
         - Low pmax + Low SAL   → adapt_weight = 0.0 (unreliable)
         
+        Neuro-Gating Modifier:
+        - If Neuro-Score is High (Motor focus): Lower thresholds (encourage adapt)
+        - If Neuro-Score is Low (Noise focus): Raise thresholds (discourage adapt)
+        
         Returns:
             should_adapt: Boolean mask [B]
             adapt_weight: Weight for adaptation [B]
         """
-        high_pmax = pmax > self.pmax_threshold
-        high_sal = sal > self.sal_threshold
+        
+        # Dynamic Thresholding
+        pmax_th = self.pmax_threshold
+        sal_th = self.sal_threshold
+        
+        # Phase 7: Online Z-score Normalization + Conservative Gating
+        
+        # Ensure pmax_th/sal_th are tensors on correct device
+        if not torch.is_tensor(self.pmax_threshold):
+                base_pmax = torch.tensor(self.pmax_threshold, device=pmax.device)
+        else:
+                base_pmax = self.pmax_threshold.to(pmax.device)
+        
+        if not torch.is_tensor(self.sal_threshold):
+                base_sal = torch.tensor(self.sal_threshold, device=sal.device)
+        else:
+                base_sal = self.sal_threshold.to(sal.device)
+        
+        # Normalize Score
+        z_score, is_warmed_up = self.normalizer(neuro_score)
+        
+        # Conservative Gating Logic: 
+        # Only INCREASE threshold if Z is negative (bad state).
+        # Modifier = beta * ReLU(-z)
+        # If Z > 0 (Good), Modifier = 0 -> Threshold stays at base (Optimum)
+        # If Z < 0 (Bad), Modifier > 0 -> Threshold increases -> Block adaptation
+        
+        negative_z = F.relu(-z_score) # Positive only if Z is negative
+        modifier = self.neuro_beta * negative_z
+        
+        pmax_th = base_pmax + modifier
+        sal_th = base_sal + modifier
+        
+        # Safety Clamp for Thresholds explanation:
+        # We allow thresholds to go up to 1.0 (impossible to pass), but base shouldn't go below initial.
+        # So clamp min is base (implied by logic) or explicit.
+        # Max clamp 1.1 ensures we can block completely.
+        # DEBUG
+        if torch.rand(1).item() < 0.05: # Print occasionally
+            print(f"[DEBUG-Cons] Beta={self.neuro_beta}, Z_mean={z_score.mean().item():.2f}, Mod_mean={modifier.mean().item():.4f}")
+            
+        # Handle Warm-up: If not warmed up, force thresholds to be very high
+        if not is_warmed_up:
+            pmax_th = torch.ones_like(pmax_th) * 1.1
+            sal_th = torch.ones_like(sal_th) * 1.1
+            
+        else:
+            pmax_th = torch.tensor(pmax_th, device=pmax.device)
+            sal_th = torch.tensor(sal_th, device=sal.device)
+
+        high_pmax = pmax > pmax_th
+        high_sal = sal > sal_th
         
         # Initialize weights
         adapt_weight = torch.zeros_like(pmax)
@@ -300,12 +474,29 @@ class PmaxSAL_OTTA(nn.Module):
             - pred: Predictions
             - pmax: Maximum probabilities
             - sal: Source Alignment Levels
-            - adapted: Whether adaptation was applied
+            - adapted: Whether adaptation was applied (Sample-wise Bool Tensor)
         """
         # Step 1: Forward pass through frozen model
         self.model.eval()
         with torch.no_grad():
             logits = self.model(x)
+        
+        # Try to retrieve channel attention weights (Neuro-Gating)
+        att_weights = None
+        
+        # Handle wrapper (TCFormerBase -> TCFormerModule)
+        target_model = self.model
+        if hasattr(target_model, 'model'):
+            target_model = target_model.model
+            
+        if hasattr(target_model, 'conv_block') and hasattr(target_model.conv_block, 'last_eca_weights'):
+            att_weights = target_model.conv_block.last_eca_weights # [B, C]
+        else:
+             # Debugging why it failed
+             if not hasattr(target_model, 'conv_block'):
+                 pass # print("[PmaxSAL-Debug] target_model has no conv_block")
+             elif not hasattr(target_model.conv_block, 'last_eca_weights'):
+                 pass # print("[PmaxSAL-Debug] conv_block has no last_eca_weights")
         
         # Step 2: Compute pmax
         pmax, pred = self.compute_pmax(logits)
@@ -320,18 +511,20 @@ class PmaxSAL_OTTA(nn.Module):
              if len(features.shape) == 3 and features.shape[2] == 1:
                  features = features.squeeze(2)
         
-        if features is not None:
-             # Debug prints
-             # print(f"DEBUG: features shape={features.shape}, prototypes shape={self.source_prototypes.shape}")
-             pass
-        
         sal = self.compute_sal(features, pred) if features is not None else pmax.clone()
         
-        # Step 4: Gating decision
-        should_adapt, adapt_weight = self.compute_gate(pmax, sal)
+        # Step 3.5: Compute Neuro-Score
+        neuro_score = self.compute_neuro_score(att_weights) # [B]
+        
+        # If neuro_score is scalar, expand to [B]
+        if neuro_score.ndim == 0:
+             neuro_score = neuro_score.unsqueeze(0).repeat(pmax.shape[0])
+        
+        # Step 4: Gating decision (with Neuro-Score)
+        should_adapt, adapt_weight = self.compute_gate(pmax, sal, neuro_score)
         
         # Step 5: Adaptation (if enabled)
-        adapted = False
+        adapted_flag = False # Internal Batch Flag
         original_pred = pred.clone() # Save original prediction
         
         if self.enable_adaptation and should_adapt.any():
@@ -341,20 +534,18 @@ class PmaxSAL_OTTA(nn.Module):
             if adapt_mask.sum() > 0:
                 # Update BN stats with adapted samples
                 self._update_bn_stats(x[adapt_mask])
-                adapted = True
+                adapted_flag = True
                 self.adaptation_stats['adapted_samples'] += adapt_mask.sum().item()
             
             # Track skipped samples
-            overconfident_mask = (pmax > self.pmax_threshold) & (sal < self.sal_threshold)
-            self.adaptation_stats['skipped_overconfident'] += overconfident_mask.sum().item()
-            
-            unreliable_mask = (pmax < self.pmax_threshold) & (sal < self.sal_threshold)
-            self.adaptation_stats['skipped_unreliable'] += unreliable_mask.sum().item()
+            # Using dynamic thresholds for counting logic is tricky, 
+            # for now we just count based on adapt_weight being 0.
+            pass
         
         self.adaptation_stats['total_samples'] += x.shape[0]
         
         # Step 6: Final forward with potentially updated BN
-        if adapted:
+        if adapted_flag:
             with torch.no_grad():
                 logits = self.model(x)
                 pmax, pred = self.compute_pmax(logits)
@@ -365,13 +556,16 @@ class PmaxSAL_OTTA(nn.Module):
             'original_pred': original_pred, # Pre-adaptation prediction
             'pmax': pmax,
             'sal': sal,
-            'adapted': adapted,
+            'neuro_score': neuro_score, # Log this!
+            'adapted': should_adapt.detach().cpu(), # Return mask on CPU
             'adapt_weight': adapt_weight,
         }
         
         if return_debug:
             result['features'] = features
             result['stats'] = self.adaptation_stats.copy()
+            if att_weights is not None:
+                result['att_weights'] = att_weights
         
         return result
 

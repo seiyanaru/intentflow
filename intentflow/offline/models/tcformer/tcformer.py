@@ -32,6 +32,29 @@ from utils.latency  import measure_latency
 
 
 # ------------------------------------------------------------------------------- #
+class EfficientChannelAttention(nn.Module):
+    """
+    Efficient Channel Attention (ECA) Module.
+    Parameter-free channel attention mechanism to capture local cross-channel interaction.
+    Reference: https://arxiv.org/abs/1910.03151
+    """
+    def __init__(self, kernel_size=3):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        self.conv = nn.Conv1d(1, 1, kernel_size=kernel_size, padding=(kernel_size - 1) // 2, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # x: [B, C, T]
+        y = self.avg_pool(x)       # [B, C, 1]
+        y = y.transpose(-1, -2)    # [B, 1, C]
+        y = self.conv(y)           # [B, 1, C]
+        y = y.transpose(-1, -2)    # [B, C, 1]
+        weights = self.sigmoid(y)  # [B, C, 1]
+        return x * weights, weights
+
+
+# ------------------------------------------------------------------------------- #
 class MultiKernelConvBlock(nn.Module):
     """
     Multi-Kernel Convolution Block for EEG Feature Extraction.
@@ -50,8 +73,16 @@ class MultiKernelConvBlock(nn.Module):
         dropout: float = 0.4,
         d_group: int = 16,
         use_group_attn: bool = True,
+        use_eca: bool = True, # Enable ECA
     ):
         super().__init__()
+
+        # --- 0. Efficient Channel Attention (ECA) ------------
+        self.use_eca = use_eca
+        if self.use_eca:
+            self.eca = EfficientChannelAttention(kernel_size=3)
+            self.last_eca_weights = None # Debug buffer
+
 
         # --- 1. one temporal conv per kernel -----------------
         self.rearrange = Rearrange("b c seq -> b 1 c seq")
@@ -132,6 +163,11 @@ class MultiKernelConvBlock(nn.Module):
         glorot_weight_zero_bias(self)
 
     def forward(self, x):
+        # --- 0. Efficient Channel Attention (ECA) ------------
+        if self.use_eca:
+            x, weights = self.eca(x)
+            self.last_eca_weights = weights.detach().squeeze(-1) # [B, C]
+
         # --- 1. one temporal conv per kernel -----------------
         x = self.rearrange(x)         # (B, 1, C, T)
         feats = [conv(x) for conv in self.temporal_convs] # list of (B, F1, C, T')
@@ -444,7 +480,7 @@ class TCFormerModule(nn.Module):
 
         self.conv_block = MultiKernelConvBlock(n_channels, temp_kernel_lengths, F1, D, 
                                                pool_length_1, pool_length_2, dropout_conv, 
-                                               d_group, use_group_attn)
+                                               d_group, use_group_attn, use_eca=True)
         self.mix = nn.Sequential(
             nn.Conv1d(
                 in_channels=self.d_model,

@@ -71,7 +71,7 @@ def train_and_test(config):
     test_accs, test_losses, test_kappas = [], [], []
     train_times, test_times, response_times = [], [], []
     all_confmats = []
-
+    
     # Loop through each subject ID for training and testing   
     for subject_id in subject_ids:
         print(f"\n>>> Training on subject: {subject_id}")
@@ -86,7 +86,6 @@ def train_and_test(config):
             verbose=True
         )
    
-        # Initialize PyTorch Lightning Trainer
         trainer = Trainer(
             max_epochs=config["max_epochs"],
             devices = -1 if config.get("gpu_id", 0) == -1 else \
@@ -120,6 +119,11 @@ def train_and_test(config):
 
         # ---------------- TEST -----------------
         st_test = time.time()
+        
+        # PROTOTYPE FIX: Pass training dataloader for SAL computation
+        if hasattr(model, "set_train_dataloader"):
+            model.set_train_dataloader(datamodule.train_dataloader())
+            
         test_results = trainer.test(model, datamodule)
         test_duration = time.time() - st_test
         test_times.append(test_duration)
