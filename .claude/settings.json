@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./secrets/**)",
+      "Read(./credentials/**)",
+      "Read(./**/*.pem)",
+      "Read(./**/*id_rsa*)",
+      "Read(./data/raw/private/**)",
+      "Read(./data/external/private/**)",
+      "Write(./data/raw/**)",
+      "Write(./data/external/**)"
+    ]
+  }
+}

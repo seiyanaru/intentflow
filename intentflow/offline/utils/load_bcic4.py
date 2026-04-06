@@ -1,7 +1,9 @@
 import os
 import pandas as pd
 import mne
+import numpy as np
 from typing import Dict, Optional, List
+from scipy.io import loadmat
 
 from braindecode.datasets import BaseConcatDataset, BaseDataset, MOABBDataset
 from braindecode.preprocessing import (
@@ -12,6 +14,91 @@ from braindecode.preprocessing import (
 
 def scale(data, factor):
     return data * factor
+
+
+def _load_bcic2a_eval_labels(
+    eval_label_path: Optional[str],
+    subject_id: int,
+) -> Optional[np.ndarray]:
+    """Load BCIC2a evaluation labels (A0xE.mat) and return class indices in [0, 3]."""
+    if not eval_label_path:
+        return None
+
+    subj = f"{subject_id:02d}"
+    candidates: List[str] = []
+    if os.path.isdir(eval_label_path):
+        candidates.extend([
+            os.path.join(eval_label_path, f"A{subj}E.mat"),
+            os.path.join(eval_label_path, f"A{subj}E.gdf.mat"),
+            os.path.join(eval_label_path, f"true_labels_A{subj}E.mat"),
+        ])
+    elif os.path.isfile(eval_label_path):
+        candidates.append(eval_label_path)
+
+    mat_path = next((p for p in candidates if os.path.exists(p)), None)
+    if mat_path is None:
+        return None
+
+    mat = loadmat(mat_path)
+    known_keys = ["classlabel", "true_y", "labels", "y_test", "label"]
+
+    label_arr = None
+    for key in known_keys:
+        if key in mat:
+            label_arr = np.asarray(mat[key]).squeeze()
+            break
+
+    if label_arr is None:
+        for key, value in mat.items():
+            if key.startswith("__"):
+                continue
+            arr = np.asarray(value).squeeze()
+            if arr.ndim == 1 and arr.size > 0 and np.issubdtype(arr.dtype, np.number):
+                uniq = set(np.unique(arr).astype(int).tolist())
+                if uniq.issubset({0, 1, 2, 3, 4}) and len(uniq) > 1:
+                    label_arr = arr
+                    break
+
+    if label_arr is None:
+        return None
+
+    labels = label_arr.astype(int).reshape(-1)
+    if labels.min() >= 1 and labels.max() <= 4:
+        labels = labels - 1
+    elif labels.min() < 0 or labels.max() > 3:
+        return None
+
+    return labels
+
+
+def _inject_bcic2a_eval_labels_into_raw(
+    raw: mne.io.BaseRaw,
+    labels_0to3: np.ndarray,
+    filepath: str,
+) -> bool:
+    """Replace 783 cue markers in E session with class markers 769-772."""
+    descriptions = np.array(raw.annotations.description, dtype=object)
+    cue_idx = np.where(descriptions == "783")[0]
+    if cue_idx.size == 0:
+        return False
+    if cue_idx.size != labels_0to3.size:
+        print(
+            f"Warning: Label count mismatch in {filepath}: "
+            f"found {cue_idx.size} cues(783), labels={labels_0to3.size}. Skipping session_E."
+        )
+        return False
+
+    event_codes = np.array(["769", "770", "771", "772"], dtype=object)
+    descriptions[cue_idx] = event_codes[labels_0to3]
+    raw.set_annotations(
+        mne.Annotations(
+            onset=raw.annotations.onset.copy(),
+            duration=raw.annotations.duration.copy(),
+            description=descriptions.tolist(),
+            orig_time=raw.annotations.orig_time,
+        )
+    )
+    return True
 
 
 def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict = None,
@@ -28,6 +115,8 @@ def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict 
             subj_str = f"{subject_id:02d}"
             
             if dataset_code == "2a":
+                eval_label_path = preprocessing_dict.get("eval_label_path")
+                eval_labels = _load_bcic2a_eval_labels(eval_label_path, subject_id)
                 # BCIC IV 2a filename convention: A01T.gdf, A01E.gdf, etc.
                 for session_code, suffix in [("session_T", "T"), ("session_E", "E")]:
                     filename = f"A{subj_str}{suffix}.gdf"
@@ -47,9 +136,20 @@ def load_bcic4(subject_ids: list, dataset: str = "2a", preprocessing_dict: Dict 
                     # Check if raw contains target events (2a: 769-772)
                     target_events = {'769', '770', '771', '772'}
                     if not any(event in raw.annotations.description for event in target_events):
+                        # Evaluation session in BCIC2a often has only cue marker "783".
+                        # If true labels are provided (A0xE.mat), inject pseudo labels into cues.
+                        if suffix == "E" and eval_labels is not None:
+                            injected = _inject_bcic2a_eval_labels_into_raw(raw, eval_labels, filepath)
+                            if injected and verbose:
+                                print(f"Injected evaluation labels into {filepath} from {eval_label_path}.")
                         if verbose:
-                            print(f"Skipping {filepath}: No target events found.")
-                        continue
+                            if not any(event in raw.annotations.description for event in target_events):
+                                print(
+                                    f"Skipping {filepath}: No target events found. "
+                                    f"For BCIC2a session_E, provide eval labels via preprocessing.eval_label_path."
+                                )
+                        if not any(event in raw.annotations.description for event in target_events):
+                            continue
 
                     description = pd.Series({
                         "subject": subject_id,

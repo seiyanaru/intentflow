@@ -288,6 +288,8 @@ class TCFormerOTTA(ClassificationModule):
         neuro_beta = kwargs.pop('neuro_beta', 0.1)
         strict_tri_lock = kwargs.pop('strict_tri_lock', True)
         enable_otta = kwargs.pop('enable_otta', True)
+        # Update operator mode: source_only, bn_stat, bn_stat_clean, tent_bn, tent_bn_ln
+        adapt_mode = kwargs.pop('adapt_mode', 'bn_stat')
         
         # Create base TCFormer
         model = TCFormerBase(
@@ -316,6 +318,7 @@ class TCFormerOTTA(ClassificationModule):
         self.neuro_beta = neuro_beta
         self.strict_tri_lock = strict_tri_lock
         self.enable_otta = enable_otta
+        self.adapt_mode = adapt_mode
         self.otta = None
         self.train_dataloader_ref = None
         self.n_classes = n_classes
@@ -340,6 +343,9 @@ class TCFormerOTTA(ClassificationModule):
                 strict_tri_lock=self.strict_tri_lock,
                 enable_adaptation=True,
             )
+            # Set update operator mode
+            self.otta.adapt_mode = self.adapt_mode
+            print(f"[TCFormerOTTA] Adaptation mode: {self.adapt_mode}")
             
             # Setup Neuro-Gating (Automated Montage Mapping)
             try:

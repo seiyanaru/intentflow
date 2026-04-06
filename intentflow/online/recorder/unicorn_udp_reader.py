@@ -15,6 +15,9 @@ class UnicornUDPReader:
     Expected packet payload (configurable):
     - csv: "v1,v2,...,vN" or multiple lines per packet
     - f32le: raw float32 little-endian bytes
+    - unicorn17f: Unicorn UDP tool packet, interpreted as 17 float32 values
+      where the first 8 values are EEG channels and the remainder is metadata
+    - auto: try csv, then unicorn17f, then generic f32le
     """
 
     def __init__(
@@ -115,7 +118,35 @@ class UnicornUDPReader:
             return self._parse_csv(data)
         if self.packet_format == "f32le":
             return self._parse_f32le(data)
+        if self.packet_format == "unicorn17f":
+            return self._parse_unicorn17f(data)
+        if self.packet_format == "auto":
+            result = self._parse_csv(data)
+            if result is not None:
+                return result
+            result = self._parse_unicorn17f(data)
+            if result is not None:
+                return result
+            return self._parse_f32le(data)
         raise ValueError(f"Unsupported packet_format: {self.packet_format}")
+
+    def _parse_unicorn17f(self, data: bytes) -> Optional[np.ndarray]:
+        """Parse a Unicorn UDP packet with 17 float32 values.
+
+        The stock Unicorn UDP utility appears to emit a single frame containing
+        8 EEG channels followed by auxiliary metadata. We keep only the first
+        ``n_channels`` values so the rest of the pipeline sees EEG-only samples.
+        """
+        try:
+            arr = np.frombuffer(data, dtype="<f4")
+            if arr.size != 17:
+                return None
+            if self.n_channels > 17:
+                return None
+            eeg = arr[: self.n_channels].astype(np.float32, copy=False)
+            return eeg.reshape(self.n_channels, 1)
+        except Exception:
+            return None
 
     def poll_window(self) -> Optional[np.ndarray]:
         """
@@ -153,4 +184,3 @@ class UnicornUDPReader:
             "window_samples": self.window_samples,
             "hop_samples": self.hop_samples,
         }
-

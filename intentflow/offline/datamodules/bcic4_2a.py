@@ -14,8 +14,9 @@ class BCICIV2a(BaseDataModule):
     all_subject_ids = list(range(1, 10))
     class_names = ["feet", "hand(L)", "hand(R)", "tongue"]
     channels = 22
-    classes = 4 
-    
+    classes = 4
+    val_dataset = None  # Add validation dataset attribute
+
     def __init__(self, preprocessing_dict, subject_id):
         super().__init__(preprocessing_dict, subject_id)
 
@@ -34,7 +35,12 @@ class BCICIV2a(BaseDataModule):
             train_dataset = splitted_ds["session_T"]
             test_dataset = splitted_ds["session_E"]
         else:
-            print("Warning: 'session_E' not found (labels likely missing). Splitting 'session_T' for train/test.")
+            eval_label_path = self.preprocessing_dict.get("eval_label_path")
+            print(
+                "Warning: 'session_E' not found. Splitting 'session_T' for train/test. "
+                f"Set preprocessing.eval_label_path to BCIC2a true labels (A0xE.mat). "
+                f"Current eval_label_path={eval_label_path}"
+            )
             # Split session_T into train/test (e.g., 80/20 split)
             # We need to split by runs or just split the concatenated data later.
             # Here we just use session_T for both but we will split the numpy arrays.
@@ -75,9 +81,10 @@ class BCICIV2a(BaseDataModule):
 
         X = np.concatenate(X_list, axis=0)
         y = np.concatenate(y_list, axis=0)
-        print(f"Total X shape: {X.shape}, Total y shape: {y.shape}")
-        
+        print(f"Total training session X shape: {X.shape}, Total y shape: {y.shape}")
+
         if test_dataset is not None:
+            # Session E exists: use it as test set
             X_test_list = []
             y_test_list = []
             for run in test_dataset.datasets:
@@ -96,21 +103,36 @@ class BCICIV2a(BaseDataModule):
                     run_y.append(target)
                 X_test_list.append(np.stack(run_X))
                 y_test_list.append(np.array(run_y))
-            
+
             X_test = np.concatenate(X_test_list, axis=0)
             y_test = np.concatenate(y_test_list, axis=0)
-        else:
 
-            # Split X, y
-            from sklearn.model_selection import train_test_split
-            X, X_test, y, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+            # Split session_T into train (80%) and validation (20%)
+            X, X_val, y, y_val = train_test_split(
+                X, y, test_size=0.2, random_state=42, stratify=y
+            )
+            print(f"Split session_T: train={X.shape[0]}, val={X_val.shape[0]}, test={X_test.shape[0]}")
+        else:
+            # Session E not available: split session_T into train/val/test
+            print("Warning: session_E not found. Splitting session_T into train/val/test")
+            # First split: 70% train, 30% temp
+            X, X_temp, y, y_temp = train_test_split(
+                X, y, test_size=0.3, random_state=42, stratify=y
+            )
+            # Second split: 20% val, 10% test from the 30% temp
+            X_val, X_test, y_val, y_test = train_test_split(
+                X_temp, y_temp, test_size=0.33, random_state=42, stratify=y_temp
+            )
+            print(f"Split session_T: train={X.shape[0]}, val={X_val.shape[0]}, test={X_test.shape[0]}")
 
         # scale data
         if self.preprocessing_dict["z_scale"]:
-            X, X_test = BaseDataModule._z_scale(X, X_test)
+            # Now we have train/val/test, use 3-way scaling
+            X, X_val, X_test = BaseDataModule._z_scale_tvt(X, X_val, X_test)
 
         # make datasets
         self.train_dataset = BaseDataModule._make_tensor_dataset(X, y)
+        self.val_dataset = BaseDataModule._make_tensor_dataset(X_val, y_val)
         self.test_dataset = BaseDataModule._make_tensor_dataset(X_test, y_test)                                                                
         # self.train_dataset = BaseDataModule._make_tensor_dataset(X, y, 
                                                                 #  preprocessing_dict=self.preprocessing_dict, mode="train")

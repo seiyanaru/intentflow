@@ -11,17 +11,18 @@ max_epochs_loso_hgd: 77
 seed: 0 # Random seed for reproducibility. 
 
 # preprocessing
-z_scale: True 
-interaug: True 
+z_scale: True
+interaug: True
 data_path: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
+data_path_2a_eval_labels: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/labels"
 data_path_2b: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2b_gdf/"
 preprocessing:
   bcic2a:
-    sfreq: 250 
-    low_cut: null 
-    high_cut: null 
-    start: 0.0  
-    stop: 4.0 
+    sfreq: 250
+    low_cut: null
+    high_cut: null
+    start: 0.0  # Reverted: Empirically validated (82.79% vs 72.07% with 0.5-4.5s)
+    stop: 4.0   # Motor imagery window from cue onset
     batch_size: 48 
   bcic2b:
     sfreq: 250

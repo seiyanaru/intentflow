@@ -253,17 +253,97 @@ class PmaxSAL_OTTA(nn.Module):
                 module.running_var.copy_(self.source_bn_stats[name]['running_var'])
     
     def _update_bn_stats(self, x: torch.Tensor):
-        """Update BN running statistics with current batch."""
-        # Set model to training mode temporarily to update BN stats
-        was_training = self.model.training
-        self.model.train()
-        
-        with torch.no_grad():
-            # Forward pass to update BN stats
-            _ = self.model(x)
-        
-        if not was_training:
+        """Update BN running statistics with current batch.
+
+        Respects self.adapt_mode:
+          'bn_stat'          – (legacy) model.train() + forward, updates running stats
+                               but also enables Dropout/DropPath (noisy).
+          'bn_stat_clean'    – only BN layers set to train mode, Dropout/DropPath stay eval.
+          'tent_bn'          – entropy minimization on BN affine params (weight/bias) with gradient.
+          'tent_bn_ln'       – entropy minimization on BN + LayerNorm affine params.
+          'source_only'      – no update (should not reach here, but safety).
+        """
+        mode = getattr(self, 'adapt_mode', 'bn_stat')
+
+        if mode == 'source_only':
+            return
+
+        if mode == 'bn_stat':
+            # Legacy: model.train() enables Dropout/DropPath alongside BN stat update
+            was_training = self.model.training
+            self.model.train()
+            with torch.no_grad():
+                _ = self.model(x)
+            if not was_training:
+                self.model.eval()
+
+        elif mode == 'bn_stat_clean':
+            # Only BN layers in train mode; Dropout/DropPath remain in eval
             self.model.eval()
+            for module in self.model.modules():
+                if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
+                    module.train()
+            with torch.no_grad():
+                _ = self.model(x)
+            self.model.eval()
+
+        elif mode in ('tent_bn', 'tent_bn_ln'):
+            # Gradient-based entropy minimization on normalization affine params
+            # PL 2.1.3 wraps test_step in torch.inference_mode(), which blocks
+            # gradient computation. We must exit inference_mode AND enter
+            # enable_grad: inference_mode(False) alone does not re-enable autograd.
+            with torch.inference_mode(False), torch.enable_grad():
+                self.model.eval()
+                for module in self.model.modules():
+                    if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
+                        module.train()
+
+                params = []
+                for module in self.model.modules():
+                    if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
+                        if module.weight is not None:
+                            params.append(module.weight)
+                        if module.bias is not None:
+                            params.append(module.bias)
+                    if mode == 'tent_bn_ln' and isinstance(module, nn.LayerNorm):
+                        if module.weight is not None:
+                            params.append(module.weight)
+                        if module.bias is not None:
+                            params.append(module.bias)
+
+                if params:
+                    for p in params:
+                        p.requires_grad_(True)
+
+                    optimizer = torch.optim.SGD(params, lr=getattr(self, 'tent_lr', 0.001))
+                    optimizer.zero_grad()
+
+                    # x is an inference tensor (created by PL's test_step context).
+                    # clone() propagates the inference flag, so we must create a
+                    # genuinely new tensor inside this inference_mode(False) context.
+                    x_tent = torch.empty_like(x).copy_(x)
+
+                    # TCFormer lazily computes and caches RoPE _cos/_sin buffers on
+                    # the first forward call (inside PL's inference_mode), making them
+                    # inference tensors. Reset them so they are recomputed here in the
+                    # non-inference context and can be saved for backward.
+                    for _m in self.model.modules():
+                        if hasattr(_m, '_cos'):
+                            _m._cos = None
+                        if hasattr(_m, '_sin'):
+                            _m._sin = None
+
+                    logits = self.model(x_tent)
+                    probs = torch.softmax(logits, dim=1)
+                    entropy = -(probs * torch.log(probs + 1e-8)).sum(dim=1).mean()
+                    entropy.backward()
+                    optimizer.step()
+                    optimizer.zero_grad()
+
+                    for p in params:
+                        p.requires_grad_(False)
+
+                self.model.eval()
     
     def compute_source_prototypes(
         self,

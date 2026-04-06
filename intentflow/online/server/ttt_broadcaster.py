@@ -36,7 +36,7 @@ sys.path.insert(0, str(_project_root))
 sys.path.insert(0, str(_project_root / "offline"))
 
 from intentflow.online.models.online_wrapper import OnlineTCFormerWrapper
-from intentflow.online.dsp.stream_preprocessor import WindowNormalizer
+from intentflow.online.dsp.stream_preprocessor import StreamNormalizer, WindowNormalizer
 from intentflow.online.recorder.unicorn_udp_reader import UnicornUDPReader
 
 
@@ -507,7 +507,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--udp_packet_format", type=str, default="csv",
-        choices=["csv", "f32le"],
+        choices=["csv", "f32le", "unicorn17f", "auto"],
         help="UDP packet format from Windows bridge"
     )
     parser.add_argument(
@@ -517,6 +517,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--confidence_threshold", type=float, default=0.3,
         help="Minimum confidence to send prediction"
+    )
+    parser.add_argument(
+        "--normalizer", type=str, default="window",
+        choices=["window", "stream"],
+        help="Normalization mode for incoming windows"
+    )
+    parser.add_argument(
+        "--stream_alpha", type=float, default=0.01,
+        help="EMA alpha for stream normalizer"
+    )
+    parser.add_argument(
+        "--stream_warmup_samples", type=int, default=250,
+        help="Warmup samples before stream normalizer starts applying z-score"
     )
     parser.add_argument(
         "--two_class_only", action="store_true", default=True,
@@ -552,8 +565,16 @@ async def main_async(args):
         reset_state_each_trial=False,
     )
     
-    # Create normalizer
-    normalizer = WindowNormalizer()
+    model_channels = int(getattr(model, "n_channels", args.stream_channels))
+    if args.normalizer == "stream":
+        normalizer = StreamNormalizer(
+            n_channels=model_channels,
+            alpha=args.stream_alpha,
+            warmup_samples=args.stream_warmup_samples,
+        )
+    else:
+        normalizer = WindowNormalizer()
+    print(f"[Init] Normalizer: {args.normalizer}")
     
     # Create broadcaster
     broadcaster = TTTBroadcaster(
@@ -620,7 +641,7 @@ async def main_async(args):
                 await server_task
 
         elif args.source == "unicorn_udp":
-            target_channels = int(getattr(model, "n_channels", args.stream_channels))
+            target_channels = model_channels
             reader = UnicornUDPReader(
                 host=args.udp_host,
                 port=args.udp_port,
@@ -635,6 +656,11 @@ async def main_async(args):
             try:
                 print("\n[Init] Unicorn UDP reader initialized.")
                 print(f"[Init] Input channels={args.stream_channels}, Model channels={target_channels}")
+                if args.stream_channels != target_channels:
+                    print(
+                        "[Init] Warning: live stream channels do not match the model. "
+                        "Current path will truncate or zero-pad channels for compatibility."
+                    )
                 print(
                     "[Init] Streaming params: "
                     f"sfreq={args.stream_sfreq}, window={args.window_sec}s, hop={args.hop_sec}s"

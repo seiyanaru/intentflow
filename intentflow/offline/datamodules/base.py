@@ -49,7 +49,22 @@ class BaseDataModule(pl.LightningDataModule):
                     )
 
     def val_dataloader(self) -> DataLoader:
-        return self.test_dataloader()
+        # IMPORTANT: Validation should NOT be the same as test (data leakage)
+        # For BCIC2a, if session_E exists, we split session_T into train/val
+        # If using BCICIV2a class, this will return test (temporary workaround until proper val split)
+        # Recommended: Use BCICIV2aTVT class which has proper train/val/test split
+        if hasattr(self, 'val_dataset') and self.val_dataset is not None:
+            return DataLoader(self.val_dataset,
+                              batch_size=self.preprocessing_dict["batch_size"],
+                              num_workers=self.preprocessing_dict.get("num_workers", os.cpu_count() // 2),
+                              pin_memory=True,
+                              persistent_workers=True,
+                              prefetch_factor=4)
+        else:
+            # Fallback: return test (WARNING: This causes data leakage!)
+            print("WARNING: val_dataset not found. Returning test_dataloader (DATA LEAKAGE!)")
+            print("         Consider using BCICIV2aTVT or implementing proper validation split.")
+            return self.test_dataloader()
 
     def test_dataloader(self) -> DataLoader:
         return DataLoader(self.test_dataset,

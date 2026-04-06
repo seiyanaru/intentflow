@@ -1,10 +1,13 @@
 # TCFormer OTTA Configuration
-# Model: TCFormer + Pmax-SAL Gated Online Test-Time Adaptation
+# Pure Energy-gate ablation:
+# - Keep tri-lock gating enabled
+# - Keep Pmax / SAL / Neuro gating unchanged
+# - Disable only the Energy gate by using an effectively non-binding threshold
 
 # general
 dataset_name: ""
 subject_ids: [1, 2, 3, 4, 5, 6, 7, 8, 9]
-max_epochs: 1000
+max_epochs: 500
 max_epochs_2b: 500
 max_epochs_loso: 125
 max_epochs_loso_hgd: 77
@@ -21,10 +24,9 @@ preprocessing:
     sfreq: 250
     low_cut: null
     high_cut: null
-    start: 0.0  # Reverted: Empirically validated (82.79% vs 72.07% with 0.5-4.5s)
-    stop: 4.0   # Motor imagery window from cue onset
+    start: 0.0
+    stop: 4.0
     batch_size: 48
-    num_workers: 4  # Reduced from default (cpu_count//2=8) to prevent worker deadlocks across subjects
   bcic2b:
     sfreq: 250
     low_cut: null
@@ -65,7 +67,7 @@ model_kwargs:
   kernel_length_tcn: 4
   dropout_tcn: 0.3
 
-  # Training parameters (matching TCFormer paper)
+  # Training parameters
   lr: 0.0009
   beta_1: 0.5
   weight_decay: 0.001
@@ -74,14 +76,14 @@ model_kwargs:
   warmup_epochs: 20
   warmup_epochs_loso: 3
 
-  # OTTA Adaptation Parameters (NEW)
-  pmax_threshold: 0.7      # Threshold for pmax confidence
-  sal_threshold: 0.5       # Threshold for Source Alignment Level
-  neuro_beta: 0.1          # Conservative gating strength (raise thresholds when Neuro-Z < 0)
-  energy_threshold: null   # If null, calibrated from source quantile below
-  energy_quantile: 0.95    # Source energy quantile used when energy_threshold is null
-  energy_temperature: 1.0  # Temperature for energy score E(x) = -T*logsumexp(logits/T)
-  strict_tri_lock: true    # Require pmax + sal + energy gates simultaneously
-  enable_otta: true        # Enable/disable adaptation
+  # OTTA Adaptation Parameters
+  pmax_threshold: 0.7
+  sal_threshold: 0.5
+  neuro_beta: 0.1
+  energy_threshold: 999999.0  # Disable only the energy gate; keep tri-lock policy unchanged
+  energy_quantile: 0.95       # Ignored because energy_threshold is fixed above
+  energy_temperature: 1.0
+  strict_tri_lock: true
+  enable_otta: true
 
 save_checkpoint: True

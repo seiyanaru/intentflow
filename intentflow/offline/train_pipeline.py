@@ -5,7 +5,7 @@ from datetime import datetime
 from argparse import ArgumentParser
 from pytorch_lightning import Trainer
 from pytorch_lightning.strategies import DDPStrategy
-from pytorch_lightning.callbacks import EarlyStopping
+# from pytorch_lightning.callbacks import EarlyStopping  # Available but not used: see EXPERIMENT_PLAN for rationale
 # from torchviz import make_dot  # optional for graph visualization
 
 from utils.plotting import plot_confusion_matrix, plot_curve
@@ -41,7 +41,8 @@ def train_and_test(config):
         result_dir = Path(__file__).resolve().parent / dir_name
 
     result_dir.mkdir(parents=True, exist_ok=True)
-    for sub in ["checkpoints", "confmats", "curves"]: (result_dir / sub).mkdir(parents=True, exist_ok=True)
+    for sub in ["checkpoints", "confmats", "curves"]:
+        (result_dir / sub).mkdir(parents=True, exist_ok=True)
 
     # Save config to the result directory
     with open(result_dir / "config.yaml", "w") as f:
@@ -79,24 +80,25 @@ def train_and_test(config):
         # Set seed for reproducibility
         seed_everything(config["seed"])
         metrics_callback = MetricsCallback()
-        early_stopping = EarlyStopping(
-            monitor="val_loss",
-            mode="min",
-            patience=50,
-            verbose=True
-        )
-   
+
+        # EarlyStopping is NOT used. Rationale:
+        # - Paper protocol: fixed 1000 epochs, final checkpoint (no model selection)
+        # - val_dataset is 20% of session_T (proper holdout, no leakage)
+        # - BUT subjects with high session shift (e.g. S2) improve on test even
+        #   when val plateaus. Early stopping would harm these subjects.
+        # - val_dataset is kept for monitoring/analysis, not for stopping.
+
         trainer = Trainer(
             max_epochs=config["max_epochs"],
             devices = -1 if config.get("gpu_id", 0) == -1 else \
                 [config.get("gpu_id", 0)],
             num_sanity_val_steps=0,
             accelerator="auto",
-            strategy = "auto" if config.get("gpu_id", 0) != -1 
-                else DDPStrategy(find_unused_parameters=True), 
+            strategy = "auto" if config.get("gpu_id", 0) != -1
+                else DDPStrategy(find_unused_parameters=True),
             logger=False,
             enable_checkpointing=False,
-            callbacks=[metrics_callback, early_stopping]
+            callbacks=[metrics_callback]
         )
 
         # Instantiate datamodule and model
@@ -112,16 +114,30 @@ def train_and_test(config):
         # Count total number of model parameters
         param_count = sum(p.numel() for p in model.parameters())
 
-        # ---------------- TRAIN ----------------
-        st_train = time.time()
-        trainer.fit(model, datamodule=datamodule)
-        train_times.append((time.time() - st_train) / 60) # minutes
+        # ---------------- TRAIN (or load checkpoint) ----------------
+        checkpoint_dir = config.get("checkpoint_dir")
+        if checkpoint_dir:
+            ckpt_path = Path(checkpoint_dir) / f"checkpoints/subject_{subject_id}_model.ckpt"
+            if not ckpt_path.exists():
+                raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+            print(f">>> Loading checkpoint: {ckpt_path}")
+            import torch
+            ckpt = torch.load(ckpt_path, map_location="cpu")
+            model.load_state_dict(ckpt["state_dict"])
+            train_times.append(0.0)
+        else:
+            st_train = time.time()
+            trainer.fit(model, datamodule=datamodule)
+            train_times.append((time.time() - st_train) / 60) # minutes
 
         # ---------------- TEST -----------------
         st_test = time.time()
         
         # PROTOTYPE FIX: Pass training dataloader for SAL computation
+        # setup("fit") is required when checkpoint_dir is set (trainer.fit skipped),
+        # otherwise train_dataset remains None and train_dataloader() raises TypeError.
         if hasattr(model, "set_train_dataloader"):
+            datamodule.setup("fit")
             model.set_train_dataloader(datamodule.train_dataloader())
             
         test_results = trainer.test(model, datamodule)
@@ -215,8 +231,14 @@ def parse_arguments():
                         help="Disable inter-trial augmentation (overrides config if specified)")
     parser.add_argument("--model_kwargs", type=str, default=None,
                         help="JSON string to override model_kwargs (e.g. '{\"ttt_config\": {\"base_lr\": 0.1}}')")
+    parser.add_argument("--config", type=str, default=None,
+                        help="Path to a YAML config file. If set, overrides the default model-based config lookup.")
     parser.add_argument("--results_dir", type=str, default=None,
                         help="Directory to save results (overrides default timestamp-based directory)")
+    parser.add_argument("--bcic2a_eval_label_path", type=str, default=None,
+                        help="Path to BCIC2a evaluation labels (directory containing A0xE.mat or a mat file)")
+    parser.add_argument("--checkpoint_dir", type=str, default=None,
+                        help="Path to pre-trained checkpoints dir. Skips training, loads checkpoints for test-only.")
     return parser.parse_args()
 
 # ----------------------------------------------
@@ -227,11 +249,16 @@ def run():
     args = parse_arguments()
      
     # load config
-    config_path = os.path.join(CONFIG_DIR, args.model, f"{args.model}.yaml")
-    if not os.path.exists(config_path):
-        config_path = os.path.join(CONFIG_DIR, f"{args.model}.yaml") 
+    if args.config is not None:
+        config_path = os.path.abspath(args.config)
         if not os.path.exists(config_path):
-            raise FileNotFoundError(f"Config not found for model '{args.model}'. Tried: {config_path}")
+            raise FileNotFoundError(f"Config not found: {config_path}")
+    else:
+        config_path = os.path.join(CONFIG_DIR, args.model, f"{args.model}.yaml")
+        if not os.path.exists(config_path):
+            config_path = os.path.join(CONFIG_DIR, f"{args.model}.yaml") 
+            if not os.path.exists(config_path):
+                raise FileNotFoundError(f"Config not found for model '{args.model}'. Tried: {config_path}")
              
     with open(config_path) as f:    
         config = yaml.safe_load(f)
@@ -272,6 +299,12 @@ def run():
         config["preprocessing"]["data_path"] = config.get("data_path_2b", config.get("data_path", None))
     else:
         config["preprocessing"]["data_path"] = config.get("data_path", None)
+    if args.dataset == "bcic2a":
+        config["preprocessing"]["eval_label_path"] = (
+            args.bcic2a_eval_label_path
+            if args.bcic2a_eval_label_path is not None
+            else config.get("data_path_2a_eval_labels", None)
+        )
     # Override interaug if specified
     if args.interaug:
         config["preprocessing"]["interaug"] = True
@@ -293,6 +326,10 @@ def run():
     # Set results_dir from args if provided
     if args.results_dir:
         config["results_dir"] = args.results_dir
+
+    # Pass checkpoint_dir for test-only mode
+    if args.checkpoint_dir:
+        config["checkpoint_dir"] = args.checkpoint_dir
 
     train_and_test(config)
 

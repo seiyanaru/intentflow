@@ -20,6 +20,7 @@ _offline_path = Path(__file__).resolve().parent.parent.parent / "offline"
 if str(_offline_path) not in sys.path:
     sys.path.insert(0, str(_offline_path))
 
+from models.tcformer.tcformer import TCFormerModule
 from models.tcformer_ttt.tcformer_hybrid import TCFormerHybridModule
 from models.tcformer_ttt.ttt_layer import TTTConfig, TTTCache
 
@@ -68,6 +69,7 @@ class OnlineTCFormerWrapper:
         if config_path is None:
             config_path = self._find_config()
         self.config = self._load_config(config_path)
+        self.model_name = str(self.config.get("model", "TCFormer"))
         
         # Build and load model
         self.model = self._build_model()
@@ -91,6 +93,7 @@ class OnlineTCFormerWrapper:
         self.class_labels = self.BCIC2A_LABELS[:self.n_classes]
         
         print(f"[OnlineTCFormerWrapper] Loaded model from {checkpoint_path}")
+        print(f"[OnlineTCFormerWrapper] Model type: {self.model_name}")
         print(f"[OnlineTCFormerWrapper] Device: {self.device}")
         print(f"[OnlineTCFormerWrapper] Classes: {self.class_labels}")
         print(f"[OnlineTCFormerWrapper] Expected channels: {getattr(self, 'n_channels', 'unknown')}")
@@ -122,8 +125,8 @@ class OnlineTCFormerWrapper:
             config = yaml.safe_load(f)
         return config
     
-    def _build_model(self) -> TCFormerHybridModule:
-        """Build the TCFormerHybridModule from config."""
+    def _build_model(self) -> torch.nn.Module:
+        """Build the online model from config."""
         model_kwargs = self.config.get("model_kwargs", {})
         ttt_config = model_kwargs.get("ttt_config", {})
         
@@ -144,8 +147,32 @@ class OnlineTCFormerWrapper:
         else:
             n_channels = model_kwargs.get("n_channels", 22)
         self.n_channels = int(n_channels)
-        
-        model = TCFormerHybridModule(
+
+        model_name = self.model_name.lower()
+        self.uses_ttt_state = model_name in {"tcformer_hybrid", "tcformer_ttt", "hybrid"}
+
+        if model_name in {"tcformer", "tcformer_otta"}:
+            return TCFormerModule(
+                n_channels=n_channels,
+                n_classes=n_classes,
+                F1=model_kwargs.get("F1", 32),
+                temp_kernel_lengths=model_kwargs.get("temp_kernel_lengths", [20, 32, 64]),
+                pool_length_1=model_kwargs.get("pool_length_1", 8),
+                pool_length_2=model_kwargs.get("pool_length_2", 7),
+                D=model_kwargs.get("D", 2),
+                dropout_conv=model_kwargs.get("dropout_conv", 0.4),
+                d_group=model_kwargs.get("d_group", 16),
+                tcn_depth=model_kwargs.get("tcn_depth", 2),
+                kernel_length_tcn=model_kwargs.get("kernel_length_tcn", 4),
+                dropout_tcn=model_kwargs.get("dropout_tcn", 0.3),
+                use_group_attn=model_kwargs.get("use_group_attn", True),
+                q_heads=model_kwargs.get("q_heads", 4),
+                kv_heads=model_kwargs.get("kv_heads", 2),
+                trans_depth=model_kwargs.get("trans_depth", 2),
+                trans_dropout=model_kwargs.get("trans_dropout", 0.4),
+            )
+
+        return TCFormerHybridModule(
             n_classes=n_classes,
             Chans=n_channels,
             F1=model_kwargs.get("F1", 32),
@@ -168,7 +195,6 @@ class OnlineTCFormerWrapper:
             lr_scale_max=model_kwargs.get("lr_scale_max", 0.5),
             entropy_gating_in_train=model_kwargs.get("entropy_gating_in_train", False),
         )
-        return model
     
     def _load_checkpoint(self) -> None:
         """Load model weights from checkpoint."""
@@ -185,8 +211,14 @@ class OnlineTCFormerWrapper:
         # Remove "model." prefix if present (from Lightning wrapper)
         cleaned_state_dict = {}
         for k, v in state_dict.items():
-            if k.startswith("model."):
-                cleaned_state_dict[k[6:]] = v  # Remove "model." prefix
+            if k.startswith("model.model."):
+                cleaned_state_dict[k[12:]] = v
+            elif k.startswith("model.tcformer.model."):
+                cleaned_state_dict[k[20:]] = v
+            elif k.startswith("model."):
+                cleaned_state_dict[k[6:]] = v
+            elif k.startswith("tcformer."):
+                cleaned_state_dict[k[9:]] = v
             else:
                 cleaned_state_dict[k] = v
         
@@ -199,6 +231,9 @@ class OnlineTCFormerWrapper:
     
     def reset_state(self) -> None:
         """Reset the TTT cache (internal state) to initial values."""
+        if not getattr(self, "uses_ttt_state", False):
+            self.cache = None
+            return
         if self._batch_size > 0:
             self.cache = self.model.create_cache(batch_size=self._batch_size)
         else:
@@ -232,11 +267,11 @@ class OnlineTCFormerWrapper:
                 - "entropy": Prediction entropy (uncertainty measure).
         """
         # Reset state if configured to do so
-        if self.reset_state_each_trial:
+        if self.reset_state_each_trial and getattr(self, "uses_ttt_state", False):
             self.reset_state()
         
         # Initialize cache on first call
-        if self.cache is None:
+        if getattr(self, "uses_ttt_state", False) and self.cache is None:
             self._batch_size = 1
             self.reset_state()
         
@@ -253,10 +288,13 @@ class OnlineTCFormerWrapper:
         
         # Forward pass (TTT adaptation happens internally if model is in eval mode)
         # Note: We don't use torch.no_grad() because TTT requires gradients for internal update
-        with torch.inference_mode(mode=False):
-            # Enable gradients for TTT internal update
-            x.requires_grad_(False)  # Input doesn't need grad
-            logits = self.model(x, cache_params=self.cache)
+        if getattr(self, "uses_ttt_state", False):
+            with torch.inference_mode(mode=False):
+                x.requires_grad_(False)
+                logits = self.model(x, cache_params=self.cache)
+        else:
+            with torch.no_grad():
+                logits = self.model(x)
         
         # Post-process
         logits_np = logits.detach().cpu().numpy()[0]  # [n_classes]
