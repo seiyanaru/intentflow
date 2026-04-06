@@ -93,6 +93,7 @@ class OnlineTCFormerWrapper:
         print(f"[OnlineTCFormerWrapper] Loaded model from {checkpoint_path}")
         print(f"[OnlineTCFormerWrapper] Device: {self.device}")
         print(f"[OnlineTCFormerWrapper] Classes: {self.class_labels}")
+        print(f"[OnlineTCFormerWrapper] Expected channels: {getattr(self, 'n_channels', 'unknown')}")
         
     def _find_config(self) -> Path:
         """Find config.yaml in checkpoint directory or parent."""
@@ -142,6 +143,7 @@ class OnlineTCFormerWrapper:
             n_channels = 3
         else:
             n_channels = model_kwargs.get("n_channels", 22)
+        self.n_channels = int(n_channels)
         
         model = TCFormerHybridModule(
             n_classes=n_classes,
@@ -357,4 +359,3 @@ class OnlineTCFormerWrapper:
             f"device={self.device}, "
             f"n_classes={self.n_classes})"
         )
-

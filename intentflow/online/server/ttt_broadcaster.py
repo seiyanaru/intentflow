@@ -23,6 +23,7 @@ import asyncio
 import json
 import sys
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -36,6 +37,7 @@ sys.path.insert(0, str(_project_root / "offline"))
 
 from intentflow.online.models.online_wrapper import OnlineTCFormerWrapper
 from intentflow.online.dsp.stream_preprocessor import WindowNormalizer
+from intentflow.online.recorder.unicorn_udp_reader import UnicornUDPReader
 
 
 # -----------------------------------------------------------------------------
@@ -135,6 +137,25 @@ def extract_trials_from_gdf(
         return np.array([]), np.array([]), []
     
     return np.stack(trials, axis=0), np.array(labels), onsets
+
+
+def adapt_channel_count(window: np.ndarray, target_channels: int) -> np.ndarray:
+    """
+    Match live input channels to model expected channels.
+
+    Strategy:
+    - C > target: truncate leading channels
+    - C < target: zero-pad missing channels
+    """
+    c, t = window.shape
+    if c == target_channels:
+        return window
+    if c > target_channels:
+        return window[:target_channels, :]
+
+    padded = np.zeros((target_channels, t), dtype=np.float32)
+    padded[:c, :] = window.astype(np.float32, copy=False)
+    return padded
 
 
 # -----------------------------------------------------------------------------
@@ -370,6 +391,45 @@ async def run_simulation(
     print(f"  Accuracy: {stats['accuracy']:.1f}%")
 
 
+async def run_unicorn_udp_live(
+    broadcaster: TTTBroadcaster,
+    reader: UnicornUDPReader,
+    target_channels: int,
+    verbose: bool = True,
+):
+    """Run continuous prediction loop with live Unicorn UDP input."""
+    print("\n[Live] Unicorn UDP mode started.")
+    print(f"[Live] Waiting UDP packets on {reader.host}:{reader.port} ...")
+    print("[Live] Press Ctrl+C to stop.")
+
+    trial_idx = 0
+    warned_channel_mismatch = False
+
+    while True:
+        window = reader.poll_window()
+        if window is None:
+            await asyncio.sleep(0.005)
+            continue
+
+        if window.shape[0] != target_channels:
+            if not warned_channel_mismatch:
+                print(
+                    "[Live] Channel mismatch detected. "
+                    f"input={window.shape[0]}, model_expected={target_channels}. "
+                    "Applying truncate/zero-pad adapter."
+                )
+                warned_channel_mismatch = True
+            window = adapt_channel_count(window, target_channels)
+
+        trial_idx += 1
+        await broadcaster.process_trial(
+            window,
+            label=None,
+            trial_idx=trial_idx,
+            verbose=verbose,
+        )
+
+
 # -----------------------------------------------------------------------------
 # Main
 # -----------------------------------------------------------------------------
@@ -381,6 +441,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint", type=str, required=True,
         help="Path to trained model checkpoint"
+    )
+    parser.add_argument(
+        "--source", type=str, default="gdf",
+        choices=["gdf", "unicorn_udp"],
+        help="Input source type"
     )
     parser.add_argument(
         "--config", type=str, default=None,
@@ -417,6 +482,39 @@ def parse_args() -> argparse.Namespace:
         help="Interval between trial predictions (seconds)"
     )
     parser.add_argument(
+        "--window_sec", type=float, default=4.0,
+        help="Window size for streaming inference (seconds)"
+    )
+    parser.add_argument(
+        "--hop_sec", type=float, default=0.25,
+        help="Hop size for streaming inference (seconds)"
+    )
+    parser.add_argument(
+        "--stream_sfreq", type=int, default=250,
+        help="Sampling frequency of incoming stream"
+    )
+    parser.add_argument(
+        "--stream_channels", type=int, default=8,
+        help="Number of channels in Unicorn live stream"
+    )
+    parser.add_argument(
+        "--udp_host", type=str, default="0.0.0.0",
+        help="UDP bind host for Unicorn stream receiver"
+    )
+    parser.add_argument(
+        "--udp_port", type=int, default=1001,
+        help="UDP bind port for Unicorn stream receiver"
+    )
+    parser.add_argument(
+        "--udp_packet_format", type=str, default="csv",
+        choices=["csv", "f32le"],
+        help="UDP packet format from Windows bridge"
+    )
+    parser.add_argument(
+        "--udp_delimiter", type=str, default=",",
+        help="Delimiter for csv packet format"
+    )
+    parser.add_argument(
         "--confidence_threshold", type=float, default=0.3,
         help="Minimum confidence to send prediction"
     )
@@ -439,6 +537,7 @@ async def main_async(args):
     print("TTT Prediction Broadcaster")
     print("=" * 60)
     print(f"Checkpoint: {args.checkpoint}")
+    print(f"Source: {args.source}")
     print(f"Subject: {args.subject}, Session: {args.session}")
     print(f"WebSocket: ws://{args.host}:{args.port}")
     print(f"Device: {device}")
@@ -463,60 +562,97 @@ async def main_async(args):
         confidence_threshold=args.confidence_threshold,
         two_class_only=args.two_class_only,
     )
-    
-    # Load trial data
-    gdf_path = Path(args.data_dir) / f"A{args.subject:02d}{args.session}.gdf"
-    if not gdf_path.exists():
-        print(f"Error: GDF file not found: {gdf_path}")
-        return
-    
-    print(f"\n[Init] Loading data from: {gdf_path}")
-    trials, labels, onsets = extract_trials_from_gdf(str(gdf_path))
-    
-    if len(trials) == 0:
-        print("Error: No valid trials found")
-        return
-    
-    # For two-class mode, filter to only left_hand (0) and right_hand (1)
-    if args.two_class_only:
-        mask = (labels == 0) | (labels == 1)
-        trials = trials[mask]
-        labels = labels[mask]
-        print(f"[Init] Filtered to {len(trials)} left/right trials")
-    
-    print(f"[Init] Loaded {len(trials)} trials")
-    print(f"[Init] Label distribution: {dict(zip(*np.unique(labels, return_counts=True)))}")
-    
-    # Start server and simulation concurrently
+
+    # Start WS server first in both modes.
     server_task = asyncio.create_task(
         run_websocket_server(broadcaster, args.host, args.port)
     )
-    
-    # Give server time to start
     await asyncio.sleep(1.0)
-    
-    # Run simulation
-    if args.loop:
-        print("\n[Mode] Loop mode enabled - will repeat trials continuously")
-        while True:
-            await run_simulation(
-                broadcaster, trials, labels,
-                trial_interval=args.trial_interval,
-                verbose=True
+
+    try:
+        if args.source == "gdf":
+            gdf_path = Path(args.data_dir) / f"A{args.subject:02d}{args.session}.gdf"
+            if not gdf_path.exists():
+                print(f"Error: GDF file not found: {gdf_path}")
+                return
+
+            print(f"\n[Init] Loading data from: {gdf_path}")
+            trials, labels, _onsets = extract_trials_from_gdf(
+                str(gdf_path),
+                sfreq_target=args.stream_sfreq,
+                window_sec=args.window_sec,
             )
-            model.reset_state()
-            print("\n[Loop] Restarting simulation...")
-            await asyncio.sleep(2.0)
-    else:
-        await run_simulation(
-            broadcaster, trials, labels,
-            trial_interval=args.trial_interval,
-            verbose=True
-        )
-        
-        # Keep server running after simulation
-        print("\n[Server] Simulation complete. Server still running. Press Ctrl+C to exit.")
-        await server_task
+
+            if len(trials) == 0:
+                print("Error: No valid trials found")
+                return
+
+            # For two-class mode, filter to only left_hand (0) and right_hand (1)
+            if args.two_class_only:
+                mask = (labels == 0) | (labels == 1)
+                trials = trials[mask]
+                labels = labels[mask]
+                print(f"[Init] Filtered to {len(trials)} left/right trials")
+
+            print(f"[Init] Loaded {len(trials)} trials")
+            print(f"[Init] Label distribution: {dict(zip(*np.unique(labels, return_counts=True)))}")
+
+            if args.loop:
+                print("\n[Mode] Loop mode enabled - will repeat trials continuously")
+                while True:
+                    await run_simulation(
+                        broadcaster, trials, labels,
+                        trial_interval=args.trial_interval,
+                        verbose=True
+                    )
+                    model.reset_state()
+                    print("\n[Loop] Restarting simulation...")
+                    await asyncio.sleep(2.0)
+            else:
+                await run_simulation(
+                    broadcaster, trials, labels,
+                    trial_interval=args.trial_interval,
+                    verbose=True
+                )
+
+                # Keep server running after simulation
+                print("\n[Server] Simulation complete. Server still running. Press Ctrl+C to exit.")
+                await server_task
+
+        elif args.source == "unicorn_udp":
+            target_channels = int(getattr(model, "n_channels", args.stream_channels))
+            reader = UnicornUDPReader(
+                host=args.udp_host,
+                port=args.udp_port,
+                n_channels=args.stream_channels,
+                sfreq=args.stream_sfreq,
+                window_sec=args.window_sec,
+                hop_sec=args.hop_sec,
+                packet_format=args.udp_packet_format,
+                delimiter=args.udp_delimiter,
+            )
+
+            try:
+                print("\n[Init] Unicorn UDP reader initialized.")
+                print(f"[Init] Input channels={args.stream_channels}, Model channels={target_channels}")
+                print(
+                    "[Init] Streaming params: "
+                    f"sfreq={args.stream_sfreq}, window={args.window_sec}s, hop={args.hop_sec}s"
+                )
+                await run_unicorn_udp_live(
+                    broadcaster=broadcaster,
+                    reader=reader,
+                    target_channels=target_channels,
+                    verbose=True,
+                )
+            finally:
+                reader.close()
+        else:
+            raise ValueError(f"Unsupported source: {args.source}")
+    finally:
+        server_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await server_task
 
 
 def main():
@@ -529,4 +665,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
