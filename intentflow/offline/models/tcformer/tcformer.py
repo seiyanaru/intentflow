@@ -155,6 +155,7 @@ class MultiKernelConvBlock(nn.Module):
         self.last_conv_norm_pre = None        # [B]
         self.last_conv_norm_post = None       # [B]
         self.last_group_attn_gamma = None     # float
+        self.last_shallow_late = None         # [B, C, T], pre-pool shallow-late feature
         
         self.pool2 = nn.AvgPool2d((1, pool_length_2))
         self.drop2 = nn.Dropout(dropout)
@@ -189,6 +190,11 @@ class MultiKernelConvBlock(nn.Module):
        
         # Grouped Temporal Convolution (1 × 16) applied independently to each group
         x = self.temporal_conv_2(x)                      
+
+        # Expose the shallow-late representation before pooling/dropout so
+        # train-time invariance regularization can target the causal layers
+        # without being dominated by stochastic dropout noise.
+        self.last_shallow_late = x
         
         # Group attention (optional) 
         if self.use_group_attn:        

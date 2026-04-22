@@ -142,3 +142,10 @@
 ## ローカル上書き
 - 共有ガイダンスはこのファイルか `.claude/rules/` に置く。
 - 個人設定は `CLAUDE.local.md` またはローカル設定に置き、共有ファイルへ混ぜない。
+
+## GPU 実行ポリシー（必須）
+- 学習・評価・sweep は GPU 実行をデフォルトにする（`--gpu_id 0` など）。
+- 実行前に必ず `conda activate intentflow` を行い、CUDA preflight（`torch.cuda.is_available()`）を確認する。
+- `--gpu_id -1` による CPU 実行は、ユーザーが明示的に要求した場合のみ許可する。
+- CUDA 不可時に CPU へ暗黙フォールバックして実験を続行しない。原因を報告し、GPU ノードで再実行する。
+

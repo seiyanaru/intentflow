@@ -1,0 +1,79 @@
+# TCFormer OTTA — momentum sweep config (S2/S7/S9 only, bs=1)
+# Purpose: determine whether S2/S7/S9 harm/gain pattern is monotone in adaptation strength.
+# Derived from tcformer_otta_bs1.yaml; subject_ids restricted to [2, 7, 9].
+
+dataset_name: ""
+subject_ids: [2, 7, 9]
+max_epochs: 1000
+max_epochs_2b: 500
+max_epochs_loso: 125
+max_epochs_loso_hgd: 77
+seed: 0
+
+z_scale: True
+interaug: True
+data_path: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
+data_path_2a_eval_labels: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/labels"
+data_path_2b: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2b_gdf/"
+preprocessing:
+  bcic2a:
+    sfreq: 250
+    low_cut: null
+    high_cut: null
+    start: 0.0
+    stop: 4.0
+    batch_size: 48
+    test_batch_size: 1
+    num_workers: 4
+  bcic2b:
+    sfreq: 250
+    low_cut: null
+    high_cut: null
+    start: 0.0
+    stop: 3.0
+    batch_size: 48
+    test_batch_size: 1
+  hgd:
+    sfreq: 250
+    low_cut: 4
+    high_cut: null
+    start: 0.0
+    stop: 4.0
+    batch_size: 48
+    test_batch_size: 1
+    remove_artifacts: False
+
+model: "tcformer_otta"
+model_kwargs:
+  F1: 32
+  temp_kernel_lengths: [20, 32, 64]
+  d_group: 16
+  D: 2
+  pool_length_1: 8
+  pool_length_2: 7
+  dropout_conv: 0.4
+  use_group_attn: True
+  q_heads: 4
+  kv_heads: 2
+  trans_depth: 2
+  trans_dropout: 0.4
+  tcn_depth: 2
+  kernel_length_tcn: 4
+  dropout_tcn: 0.3
+  lr: 0.0009
+  beta_1: 0.5
+  weight_decay: 0.001
+  optimizer: "adam"
+  scheduler: True
+  warmup_epochs: 20
+  warmup_epochs_loso: 3
+  pmax_threshold: 0.7
+  sal_threshold: 0.5
+  neuro_beta: 0.1
+  energy_threshold: null
+  energy_quantile: 0.95
+  energy_temperature: 1.0
+  strict_tri_lock: true
+  enable_otta: true
+
+save_checkpoint: True

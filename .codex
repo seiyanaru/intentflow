@@ -1,0 +1,75 @@
+# IntentFlow 研究ガイド
+
+## ユーザー
+- 応答は必ず日本語。
+- 簡潔・技術的・結論先行で書く。
+- イエスマンにならない。弱い実験設計、不公平な比較、根拠の薄い主張は率直に指摘する。
+
+## 研究の大目的
+- Active BCI の精度を上げる。
+- Active BCI を軽量にし、リアルタイム運用しやすくする。
+- テストタイム適応を使って、被験者差・セッション差・環境変動に強くする。
+- 精度改善だけでなく、安全性と安定性も保つ。
+
+## このリポジトリで重視すること
+- 科学的妥当性、再現性、オンライン安全性をコーディング速度より優先する。
+- データリークや split 前提の変更を黙って入れない。
+- seed、metrics、前処理、baseline の変更は必ず明示する。
+- 小さく戻しやすい差分を優先する。
+- baseline config や過去の比較対象は上書きせず、新しい名前で派生を作る。
+
+## 主な作業領域
+- `intentflow/offline/`: 学習、評価、OTTA/TTT、アブレーション、解析。
+- `intentflow/online/`: ストリーミング推論、適応、レコーダ、サーバ、ブリッジ。
+- `docs/research_progress/`: 日付付き進捗ノート。
+- `docs/related_research/`: 文献メモ。
+- `.claude/memory/`: 永続メモリ。
+- `.claude/skills/`: 実験設計、文献レビュー、結果要約などの再利用ワークフロー。
+
+## 作業開始時
+1. タスクを `Objective`、`Constraints`、`Files to inspect`、`Validation plan`、`Main risk` で整理する。
+2. 関連コードと関連ドキュメントを読んでから編集する。
+3. `.claude/memory/MEMORY.md` を読み、必要なメモだけ追加で読む。
+4. タスクに合う `.claude/skills/` があれば使う。
+5. 最小変更でボトルネックを解消する。
+6. 変更を守れる最小限の検証を行う。
+
+## 実験設計の基本
+- 仮説は1文で置く。
+- 明示的に grid / factorial が必要でない限り、変更因子は1つにする。
+- dataset、split、seed方針、前処理、metrics、hardware assumption、baseline を固定する。
+- 「何を変えたか」だけでなく、「何を固定したか」を明記する。
+- どの結果なら仮説が棄却されるかを書く。
+
+## 結果解析の基本
+- exact config、script、dataset、split、comparison target を必ず含める。
+- 絶対値だけでなく baseline との差分を出す。
+- 改善だけでなく回帰も同じ強さで報告する。
+- 観測事実、解釈、不確実性を分ける。
+- 長いログは、errors、warnings、final metrics、confounder の痕跡を先に探す。
+
+## 可視化の基本
+- 実験や比較がひと区切りついたら、要約だけで終わらずゼミ発表用の可視化まで進める。
+- 最低限の図: 被験者ごとの性能比較、baseline との差分、平均と分散、代表的な失敗例。
+- attention や channel importance があるなら、脳の図、topomap、脳領域寄与図も候補に入れる。
+- 図は「何を主張する図か」を1文で言えるものだけ作る。
+
+## オンライン系の注意
+- 低信頼予測に対する abstention / fail-closed 動作を維持する。
+- ERRP や safety fallback を黙って削除しない。
+- latency、buffering、protocol、channel order のリスクを明示する。
+- Unity や WebSocket の message contract を黙って変えない。
+
+## 終了時の報告
+- Files changed
+- Commands run
+- Observed results
+- Figures generated
+- Remaining uncertainty
+- Recommended next experiment
+
+## GPU 実行ポリシー（必須）
+- 学習・評価・sweep の実行は GPU をデフォルトにする（`--gpu_id 0` など）。
+- `conda activate intentflow` 後に CUDA preflight を実行し、`torch.cuda.is_available()==True` を確認してから本実行を開始する。
+- `--gpu_id -1`（CPU実行）は、ユーザーが明示的に要求した場合のみ許可する。
+- CUDA が見えない場合は、CPUにフォールバックして勝手に実行しない。原因を報告して GPU ノードでの再実行を優先する。

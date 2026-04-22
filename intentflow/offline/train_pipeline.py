@@ -27,6 +27,10 @@ def train_and_test(config):
      # Create result and checkpoints directories
     model_name = config["model"]
     dataset_name = config["dataset_name"]
+    use_cpu = config.get("gpu_id", 0) == -1
+
+    if use_cpu and dataset_name in config["preprocessing"]:
+        config["preprocessing"][dataset_name]["num_workers"] = 0
     
     if "results_dir" in config and config["results_dir"]:
         result_dir = Path(config["results_dir"])
@@ -90,12 +94,10 @@ def train_and_test(config):
 
         trainer = Trainer(
             max_epochs=config["max_epochs"],
-            devices = -1 if config.get("gpu_id", 0) == -1 else \
-                [config.get("gpu_id", 0)],
+            devices=1 if use_cpu else [config.get("gpu_id", 0)],
             num_sanity_val_steps=0,
-            accelerator="auto",
-            strategy = "auto" if config.get("gpu_id", 0) != -1
-                else DDPStrategy(find_unused_parameters=True),
+            accelerator="cpu" if use_cpu else "auto",
+            strategy="auto",
             logger=False,
             enable_checkpointing=False,
             callbacks=[metrics_callback]

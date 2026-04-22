@@ -109,6 +109,10 @@ class PmaxSAL_OTTA(nn.Module):
         strict_tri_lock: bool = True,
         alpha: float = 0.5,  # Weight between pmax and SAL
         bn_momentum: float = 0.1,  # BN stats update momentum
+        bn_shallow_mean_momentum: Optional[float] = None,
+        bn_shallow_var_momentum: Optional[float] = None,
+        bn_deep_mean_momentum: Optional[float] = None,
+        bn_deep_var_momentum: Optional[float] = None,
         enable_adaptation: bool = True,
     ):
         """
@@ -129,6 +133,10 @@ class PmaxSAL_OTTA(nn.Module):
         self.sal_threshold = sal_threshold
         self.alpha = alpha
         self.bn_momentum = bn_momentum
+        self.bn_shallow_mean_momentum = bn_shallow_mean_momentum
+        self.bn_shallow_var_momentum = bn_shallow_var_momentum
+        self.bn_deep_mean_momentum = bn_deep_mean_momentum
+        self.bn_deep_var_momentum = bn_deep_var_momentum
         self.enable_adaptation = enable_adaptation
         self.fixed_energy_threshold = None if energy_threshold is None else float(energy_threshold)
         self.energy_quantile = float(energy_quantile)
@@ -252,40 +260,173 @@ class PmaxSAL_OTTA(nn.Module):
                 module.running_mean.copy_(self.source_bn_stats[name]['running_mean'])
                 module.running_var.copy_(self.source_bn_stats[name]['running_var'])
     
-    def _update_bn_stats(self, x: torch.Tensor):
+    def _update_bn_stats(self, x: torch.Tensor) -> tuple:
         """Update BN running statistics with current batch.
 
-        Respects self.adapt_mode:
-          'bn_stat'          – (legacy) model.train() + forward, updates running stats
-                               but also enables Dropout/DropPath (noisy).
-          'bn_stat_clean'    – only BN layers set to train mode, Dropout/DropPath stay eval.
-          'tent_bn'          – entropy minimization on BN affine params (weight/bias) with gradient.
-          'tent_bn_ln'       – entropy minimization on BN + LayerNorm affine params.
-          'source_only'      – no update (should not reach here, but safety).
+        Respects self.adapt_mode and self.bn_update_target:
+          adapt_mode:
+            'bn_stat'       – model.train() + forward (Dropout also enabled)
+            'bn_stat_clean' – only BN layers in train mode
+            'tent_bn/ln'    – gradient-based affine update (no running stats change)
+            'source_only'   – no update
+          bn_update_target (controls *what* gets updated):
+            'both'                  – mean and var, all layers (default)
+            'mean_only'             – only running_mean, all layers
+            'var_only'              – only running_var, all layers
+            'shallow'               – mean and var, first half (conv_block)
+            'deep'                  – mean and var, second half (mix/reduce/tcn)
+            'shallow_mean_only'     – only mean, shallow layers
+            'shallow_var_only'      – only var,  shallow layers
+            'deep_mean_only'        – only mean, deep layers
+            'deep_var_only'         – only var,  deep layers
+            'shallow_mean_deep_both'    – shallow: mean only (var frozen); deep: mean+var
+                                          causal minimum intervention (current best)
+            'shallow_mean_deep_mean_only'– shallow: mean only; deep: mean only
+                                          conservative: all var frozen
+            'shallow_mean_deep_var_only' – shallow: mean only; deep: var only
+                                          isolates deep var contribution
+
+        Returns:
+            (total_drift: float, layer_drifts: list[float])
+            layer_drifts[i] = drift of i-th BN layer in model order
         """
         mode = getattr(self, 'adapt_mode', 'bn_stat')
 
         if mode == 'source_only':
-            return
+            return 0.0, []
 
-        if mode == 'bn_stat':
-            # Legacy: model.train() enables Dropout/DropPath alongside BN stat update
-            was_training = self.model.training
-            self.model.train()
-            with torch.no_grad():
-                _ = self.model(x)
-            if not was_training:
+        bn_momentum = float(getattr(self, 'bn_momentum', 0.1))
+        update_target = getattr(self, 'bn_update_target', 'both')
+        shallow_mean_override = getattr(self, 'bn_shallow_mean_momentum', None)
+        shallow_var_override = getattr(self, 'bn_shallow_var_momentum', None)
+        deep_mean_override = getattr(self, 'bn_deep_mean_momentum', None)
+        deep_var_override = getattr(self, 'bn_deep_var_momentum', None)
+
+        if mode in ('bn_stat', 'bn_stat_clean'):
+            # Ordered list of (name, module) for all BN layers
+            bn_layers = [(n, m) for n, m in self.model.named_modules()
+                         if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d))]
+            n_bn = len(bn_layers)
+            shallow_names = {n for n, _ in bn_layers[:n_bn // 2]}
+            deep_names = {n for n, _ in bn_layers[n_bn // 2:]}
+            all_names = [n for n, _ in bn_layers]
+
+            desired_momenta = {
+                name: {'mean': 0.0, 'var': 0.0}
+                for name in all_names
+            }
+
+            def set_momenta(names, *, mean=None, var=None):
+                for name in names:
+                    if mean is not None:
+                        desired_momenta[name]['mean'] = float(mean)
+                    if var is not None:
+                        desired_momenta[name]['var'] = float(var)
+
+            if update_target == 'both':
+                set_momenta(all_names, mean=bn_momentum, var=bn_momentum)
+            elif update_target == 'mean_only':
+                set_momenta(all_names, mean=bn_momentum, var=0.0)
+            elif update_target == 'var_only':
+                set_momenta(all_names, mean=0.0, var=bn_momentum)
+            elif update_target == 'shallow':
+                set_momenta(shallow_names, mean=bn_momentum, var=bn_momentum)
+            elif update_target == 'deep':
+                set_momenta(deep_names, mean=bn_momentum, var=bn_momentum)
+            elif update_target == 'shallow_mean_only':
+                set_momenta(shallow_names, mean=bn_momentum, var=0.0)
+            elif update_target == 'shallow_var_only':
+                set_momenta(shallow_names, mean=0.0, var=bn_momentum)
+            elif update_target == 'deep_mean_only':
+                set_momenta(deep_names, mean=bn_momentum, var=0.0)
+            elif update_target == 'deep_var_only':
+                set_momenta(deep_names, mean=0.0, var=bn_momentum)
+            elif update_target == 'shallow_mean_deep_both':
+                set_momenta(shallow_names, mean=bn_momentum, var=0.0)
+                set_momenta(deep_names, mean=bn_momentum, var=bn_momentum)
+            elif update_target == 'shallow_mean_deep_mean_only':
+                set_momenta(shallow_names, mean=bn_momentum, var=0.0)
+                set_momenta(deep_names, mean=bn_momentum, var=0.0)
+            elif update_target == 'shallow_mean_deep_var_only':
+                set_momenta(shallow_names, mean=bn_momentum, var=0.0)
+                set_momenta(deep_names, mean=0.0, var=bn_momentum)
+            else:
+                raise ValueError(f"Unsupported bn_update_target: {update_target}")
+
+            override_map = {
+                'shallow': {'mean': shallow_mean_override, 'var': shallow_var_override},
+                'deep': {'mean': deep_mean_override, 'var': deep_var_override},
+            }
+            for name in all_names:
+                scope = 'shallow' if name in shallow_names else 'deep'
+                for stat_name in ('mean', 'var'):
+                    override = override_map[scope][stat_name]
+                    if override is not None and desired_momenta[name][stat_name] > 0.0:
+                        desired_momenta[name][stat_name] = float(override)
+
+            active_momenta = {
+                name: max(stats['mean'], stats['var'])
+                for name, stats in desired_momenta.items()
+            }
+
+            # Snapshot all BN states; each layer forwards with the max momentum needed
+            # for that layer, then each statistic is scaled back to its desired momentum.
+            bn_before, orig_momentum = {}, {}
+            for name, m in bn_layers:
+                bn_before[name] = (m.running_mean.clone(), m.running_var.clone())
+                orig_momentum[name] = m.momentum
+                m.momentum = active_momenta[name]
+
+            if mode == 'bn_stat':
+                was_training = self.model.training
+                self.model.train()
+                with torch.no_grad():
+                    _ = self.model(x)
+                if not was_training:
+                    self.model.eval()
+            else:
+                self.model.eval()
+                for _, m in bn_layers:
+                    m.train()
+                with torch.no_grad():
+                    _ = self.model(x)
                 self.model.eval()
 
-        elif mode == 'bn_stat_clean':
-            # Only BN layers in train mode; Dropout/DropPath remain in eval
-            self.model.eval()
-            for module in self.model.modules():
-                if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d)):
-                    module.train()
-            with torch.no_grad():
-                _ = self.model(x)
-            self.model.eval()
+            # Selective mean/var update with per-stat momentum support.
+            for name, m in bn_layers:
+                before_mean, before_var = bn_before[name]
+                desired_mean = desired_momenta[name]['mean']
+                desired_var = desired_momenta[name]['var']
+                base_momentum = active_momenta[name]
+                updated_mean = m.running_mean.clone()
+                updated_var = m.running_var.clone()
+
+                if base_momentum <= 0.0:
+                    m.running_mean.copy_(before_mean)
+                    m.running_var.copy_(before_var)
+                    continue
+
+                if desired_mean <= 0.0:
+                    m.running_mean.copy_(before_mean)
+                elif desired_mean != base_momentum:
+                    scale = desired_mean / base_momentum
+                    m.running_mean.copy_(before_mean + (updated_mean - before_mean) * scale)
+
+                if desired_var <= 0.0:
+                    m.running_var.copy_(before_var)
+                elif desired_var != base_momentum:
+                    scale = desired_var / base_momentum
+                    m.running_var.copy_(before_var + (updated_var - before_var) * scale)
+
+            # Compute per-layer drift and restore original momentum
+            layer_drifts = []
+            for name, m in bn_layers:
+                d = (m.running_mean - bn_before[name][0]).norm().item()
+                d += (m.running_var  - bn_before[name][1]).norm().item()
+                layer_drifts.append(d)
+                m.momentum = orig_momentum[name]
+
+            return sum(layer_drifts), layer_drifts
 
         elif mode in ('tent_bn', 'tent_bn_ln'):
             # Gradient-based entropy minimization on normalization affine params
@@ -337,14 +478,34 @@ class PmaxSAL_OTTA(nn.Module):
                     probs = torch.softmax(logits, dim=1)
                     entropy = -(probs * torch.log(probs + 1e-8)).sum(dim=1).mean()
                     entropy.backward()
-                    optimizer.step()
+
+                    # one-time diagnostic: verify gradient is actually flowing
+                    if not getattr(self, '_tent_grad_debug_done', False):
+                        self._tent_grad_debug_done = True
+                        grad_norms = [
+                            p.grad.norm().item() if p.grad is not None else float('nan')
+                            for p in params
+                        ]
+                        _snap = [p.data.clone() for p in params]
+                        optimizer.step()
+                        delta_norms = [(p.data - b).norm().item() for p, b in zip(params, _snap)]
+                        print(
+                            f"[TENT-DIAG] mode={mode}, "
+                            f"grad_enabled={torch.is_grad_enabled()}, "
+                            f"n_params={len(params)}, "
+                            f"grad_norms(first5)={[f'{g:.3e}' for g in grad_norms[:5]]}, "
+                            f"delta_norms(first5)={[f'{d:.3e}' for d in delta_norms[:5]]}"
+                        )
+                    else:
+                        optimizer.step()
                     optimizer.zero_grad()
 
                     for p in params:
                         p.requires_grad_(False)
 
                 self.model.eval()
-    
+            return 0.0, []  # drift_norm, layer_drifts: affine params change, not running stats
+
     def compute_source_prototypes(
         self,
         dataloader,
@@ -668,43 +829,47 @@ class PmaxSAL_OTTA(nn.Module):
         adapted_flag = False # Internal Batch Flag
         original_pred = pred.clone() # Save original prediction
         
+        bn_drift_norm = 0.0
+        bn_drift_layers: list = []
         if self.enable_adaptation and should_adapt.any():
-            # Get samples to adapt
             adapt_mask = should_adapt
-            
             if adapt_mask.sum() > 0:
-                # Update BN stats with adapted samples
-                self._update_bn_stats(x[adapt_mask])
+                bn_drift_norm, bn_drift_layers = self._update_bn_stats(x[adapt_mask])
                 adapted_flag = True
                 self.adaptation_stats['adapted_samples'] += adapt_mask.sum().item()
-            
-            # Track skipped samples
-            # Using dynamic thresholds for counting logic is tricky, 
-            # for now we just count based on adapt_weight being 0.
-            pass
-        
+
         self.adaptation_stats['total_samples'] += x.shape[0]
         gate = self._last_gate_info
         if gate:
             self.adaptation_stats['skipped_overconfident'] += (gate["high_pmax"] & ~gate["high_sal"]).sum().item()
             self.adaptation_stats['skipped_unreliable'] += (~gate["high_pmax"]).sum().item()
             self.adaptation_stats['skipped_energy'] += (gate["high_pmax"] & gate["high_sal"] & ~gate["safe_energy"]).sum().item()
-        
+
         # Step 6: Final forward with potentially updated BN
         if adapted_flag:
             with torch.no_grad():
                 logits = self.model(x)
                 pmax, pred = self.compute_pmax(logits)
-        
+
+        # Per-trial diagnostics (entropy, logit_norm) from final logits
+        with torch.no_grad():
+            probs_final = torch.softmax(logits, dim=-1)
+            entropy_per_sample = -(probs_final * torch.log(probs_final + 1e-8)).sum(dim=-1)
+            logit_norm_per_sample = logits.norm(dim=-1)
+
         result = {
             'logits': logits,
-            'pred': pred, # Final prediction
-            'original_pred': original_pred, # Pre-adaptation prediction
+            'pred': pred,
+            'original_pred': original_pred,
             'pmax': pmax,
             'sal': sal,
-            'neuro_score': neuro_score, # Log this!
+            'neuro_score': neuro_score,
             'energy_score': energy,
-            'adapted': should_adapt.detach().cpu(), # Return mask on CPU
+            'entropy': entropy_per_sample,
+            'logit_norm': logit_norm_per_sample,
+            'bn_drift_norm': torch.tensor([bn_drift_norm], dtype=torch.float32),
+            'bn_drift_layers': torch.tensor(bn_drift_layers, dtype=torch.float32),  # [n_bn_layers] or []
+            'adapted': should_adapt.detach().cpu(),
             'adapt_weight': adapt_weight,
         }
         

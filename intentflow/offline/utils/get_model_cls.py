@@ -11,6 +11,9 @@ def get_model_cls(model_name):
     elif model_name.lower() == "tcformer_otta":
         from models.tcformer_otta import TCFormerOTTA
         return TCFormerOTTA
+    elif model_name.lower() == "tcformer_aug_shinv":
+        from models.tcformer_aug_shinv import TCFormerAugShInv
+        return TCFormerAugShInv
     elif model_name == "ATCNet":
         from models.tcformer.atcnet import ATCNet
         return ATCNet
