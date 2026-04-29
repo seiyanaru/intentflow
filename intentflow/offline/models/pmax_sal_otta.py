@@ -696,6 +696,8 @@ class PmaxSAL_OTTA(nn.Module):
         z_score, is_warmed_up = self.normalizer(neuro_score)
         negative_z = F.relu(-z_score)
         modifier = self.neuro_beta * negative_z
+        if torch.is_tensor(modifier):
+            modifier = modifier.to(base_pmax.device)
         pmax_th = base_pmax + modifier
         sal_th = base_sal + modifier
 

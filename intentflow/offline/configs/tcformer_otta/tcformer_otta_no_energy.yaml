@@ -16,9 +16,9 @@ seed: 0
 # preprocessing
 z_scale: True
 interaug: True
-data_path: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
-data_path_2a_eval_labels: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/labels"
-data_path_2b: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2b_gdf/"
+data_path: "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
+data_path_2a_eval_labels: "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/labels"
+data_path_2b: "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2b_gdf/"
 preprocessing:
   bcic2a:
     sfreq: 250

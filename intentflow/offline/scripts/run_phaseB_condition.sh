@@ -19,6 +19,7 @@ LAMBDA_SHINV="${7:-0.0}"
 RESULT_ROOT="${8:-results/phaseB_condition_${VARIANT}_$(date +%Y%m%d_%H%M%S)}"
 SHINV_MODE="${9:-mean_logvar}"
 LAMBDA_AUG="${10:-0.5}"
+DATASET="${11:-bcic2a}"
 
 # Enforce GPU-by-default execution policy.
 if [[ "${GPU_ID}" != "-1" ]]; then
@@ -81,13 +82,14 @@ PY
 echo "[PhaseB] train config: ${TRAIN_CONFIG}"
 echo "[PhaseB] eval config:  ${EVAL_CONFIG}"
 echo "[PhaseB] variant:      ${VARIANT}"
+echo "[PhaseB] dataset:      ${DATASET}"
 echo "[PhaseB] results root: ${RESULT_ROOT}"
 echo "[PhaseB] shinv_mode:   ${SHINV_MODE}"
 echo "[PhaseB] lambda_aug:   ${LAMBDA_AUG}"
 
 python train_pipeline.py \
   --model tcformer_aug_shinv \
-  --dataset bcic2a \
+  --dataset "${DATASET}" \
   --seed "${SEED}" \
   --gpu_id "${GPU_ID}" \
   --config "${TRAIN_CONFIG}" \
@@ -96,7 +98,7 @@ python train_pipeline.py \
 
 python train_pipeline.py \
   --model tcformer_otta \
-  --dataset bcic2a \
+  --dataset "${DATASET}" \
   --seed "${SEED}" \
   --gpu_id "${GPU_ID}" \
   --config "${EVAL_CONFIG}" \

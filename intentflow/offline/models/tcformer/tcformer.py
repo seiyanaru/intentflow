@@ -476,6 +476,7 @@ class TCFormerModule(nn.Module):
             trans_dropout: float = 0.4,
             drop_path_max: float = 0.25, 
             trans_depth: int = 5,
+            use_eca: bool = True,
         ):
         super().__init__()
         self.n_classes = n_classes
@@ -486,7 +487,7 @@ class TCFormerModule(nn.Module):
 
         self.conv_block = MultiKernelConvBlock(n_channels, temp_kernel_lengths, F1, D, 
                                                pool_length_1, pool_length_2, dropout_conv, 
-                                               d_group, use_group_attn, use_eca=True)
+                                               d_group, use_group_attn, use_eca=use_eca)
         self.mix = nn.Sequential(
             nn.Conv1d(
                 in_channels=self.d_model,
@@ -569,6 +570,7 @@ class TCFormer(ClassificationModule):
             kv_heads: int = 4,
             trans_depth: int = 5,    
             trans_dropout: float = 0.4,
+            use_eca: bool = True,
             **kwargs
         ):
         model = TCFormerModule(
@@ -589,6 +591,7 @@ class TCFormer(ClassificationModule):
             kv_heads = kv_heads, 
             trans_depth = trans_depth,
             trans_dropout = trans_dropout,
+            use_eca = use_eca,
         )
         super().__init__(model, n_classes, **kwargs)
     

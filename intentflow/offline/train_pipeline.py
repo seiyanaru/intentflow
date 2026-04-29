@@ -22,6 +22,49 @@ from utils.seed import seed_everything
 # Define the path to the configuration directory
 CONFIG_DIR = Path(__file__).resolve().parent / "configs"
 
+
+def _adapt_checkpoint_state_dict(model, state_dict):
+    """Handle known wrapper-prefix mismatches between source/eval model classes."""
+    model_keys = model.state_dict().keys()
+    ckpt_keys = state_dict.keys()
+
+    if (
+        any(k.startswith("model.model.") for k in model_keys)
+        and any(k.startswith("model.") for k in ckpt_keys)
+        and not any(k.startswith("model.model.") for k in ckpt_keys)
+    ):
+        remapped = {}
+        for key, value in state_dict.items():
+            if key.startswith("model."):
+                remapped["model.model." + key[len("model."):]] = value
+            else:
+                remapped[key] = value
+        return remapped
+
+    return state_dict
+
+
+def _load_checkpoint_compatibly(model, state_dict):
+    """Load checkpoints while permitting narrowly scoped legacy-key gaps."""
+    state_dict = _adapt_checkpoint_state_dict(model, state_dict)
+    incompatible = model.load_state_dict(state_dict, strict=False)
+
+    allowed_missing = {
+        "model.conv_block.eca.conv.weight",
+        "model.model.conv_block.eca.conv.weight",
+    }
+    missing = set(incompatible.missing_keys)
+    unexpected = set(incompatible.unexpected_keys)
+
+    if unexpected or not missing.issubset(allowed_missing):
+        raise RuntimeError(
+            "Checkpoint incompatible with current model. "
+            f"missing_keys={sorted(missing)}, unexpected_keys={sorted(unexpected)}"
+        )
+
+    if missing:
+        print(f">>> Allowing legacy missing keys: {sorted(missing)}")
+
 # Main training and testing pipeline
 def train_and_test(config):
      # Create result and checkpoints directories
@@ -59,9 +102,10 @@ def train_and_test(config):
     config["model_kwargs"]["n_channels"] = datamodule_cls.channels
     config["model_kwargs"]["n_classes"] = datamodule_cls.classes
     
-    # Update data_path to absolute path if not set (fallback)
-    if config["preprocessing"].get("data_path") is None:
-        config["preprocessing"]["data_path"] = "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
+    # Update data_path to absolute path if not set (fallback). 2b intentionally keeps None
+    # to route through MOABB (BNCI2014004) in load_bcic4.
+    if config["preprocessing"].get("data_path") is None and dataset_name != "bcic2b":
+        config["preprocessing"]["data_path"] = "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
 
     # Parse subject IDs from config
     subj_cfg = config["subject_ids"]
@@ -125,7 +169,7 @@ def train_and_test(config):
             print(f">>> Loading checkpoint: {ckpt_path}")
             import torch
             ckpt = torch.load(ckpt_path, map_location="cpu")
-            model.load_state_dict(ckpt["state_dict"])
+            _load_checkpoint_compatibly(model, ckpt["state_dict"])
             train_times.append(0.0)
         else:
             st_train = time.time()
@@ -298,7 +342,9 @@ def run():
     config["preprocessing"]["z_scale"] = config["z_scale"]
     # Select appropriate data path based on dataset
     if args.dataset == "bcic2b":
-        config["preprocessing"]["data_path"] = config.get("data_path_2b", config.get("data_path", None))
+        # TCFormer official: use MOABB (BNCI2014004) for 2b so evaluation session labels
+        # are auto-resolved. Local GDF path lacks true-label .mat, so force None.
+        config["preprocessing"]["data_path"] = None
     else:
         config["preprocessing"]["data_path"] = config.get("data_path", None)
     if args.dataset == "bcic2a":

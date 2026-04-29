@@ -25,112 +25,59 @@ class BCICIV2b(BaseDataModule):
     def setup(self, stage: Optional[str] = None) -> None:
         if self.dataset is None:
             self.prepare_data()
-        # split the data
         splitted_ds = self.dataset.split("session")
-        
-        # BCIC IV-2b uses session_0, session_1, session_2 for training
-        # and session_3, session_4 for evaluation
         available_sessions = list(splitted_ds.keys())
         print(f"Available sessions for subject {self.subject_id}: {available_sessions}")
-        
-        # Get training sessions (0, 1, 2)
-        train_session_keys = [k for k in available_sessions if k in ["session_0", "session_1", "session_2"]]
-        
-        if not train_session_keys:
-            raise ValueError(f"No training sessions found. Available: {available_sessions}")
-        
-        # Get test sessions (3, 4) if available
-        test_session_keys = [k for k in available_sessions if k in ["session_3", "session_4"]]
-        
-        if not test_session_keys:
-            print("Warning: No evaluation sessions (3, 4) found. Will split training data.")
 
-        # Expected sample length: 3.0s @ 250Hz = 750 samples
-        expected_length = 750
-        
-        # Load training data
-        X_list = []
-        y_list = []
-        for session_key in train_session_keys:
-            train_dataset = splitted_ds[session_key]
-            for i, run in enumerate(train_dataset.datasets):
-                try:
-                    run_X = []
-                    run_y = []
+        # MOABB (BNCI2014004) uses keys '0train'..'2train' / '3test'/'4test'.
+        # Local GDF path (if ever re-enabled) uses 'session_0'..'session_4'.
+        def _pick(*candidates):
+            for c in candidates:
+                if c in splitted_ds:
+                    return c
+            raise ValueError(
+                f"Subject {self.subject_id}: none of {candidates} found. "
+                f"Available: {available_sessions}"
+            )
+        train_session_keys = [_pick("0train", "session_0"), _pick("1train", "session_1"), _pick("2train", "session_2")]
+        test_session_keys = [_pick("3test", "session_3"), _pick("4test", "session_4")]
+
+        # TCFormer official window: stop=-0.5 trims MOABB trial end (4.5s) -> 4.0s / 1000 samples.
+        # Sessions 1-2 (4s MI) yield shorter segments; enforce 1000 via crop/pad for batch-stacking.
+        expected_length = 1000
+
+        def _load(keys):
+            xs, ys = [], []
+            for session_key in keys:
+                for i, run in enumerate(splitted_ds[session_key].datasets):
+                    run_X, run_y = [], []
                     for j in range(len(run)):
                         x, target, _ = run[j]
-                        # Standardize length
                         if x.shape[-1] > expected_length:
                             x = x[..., :expected_length]
                         elif x.shape[-1] < expected_length:
-                            padding = expected_length - x.shape[-1]
-                            x = np.pad(x, ((0, 0), (0, padding)), 'constant')
-                        
+                            pad = expected_length - x.shape[-1]
+                            x = np.pad(x, ((0, 0), (0, pad)), "constant")
                         run_X.append(x)
                         run_y.append(target)
-                    
-                    run_X = np.stack(run_X)
-                    run_y = np.array(run_y)
-                    
-                    X_list.append(run_X)
-                    y_list.append(run_y)
-                    print(f"Loaded {session_key} run {i}: X shape {run_X.shape}")
-                except Exception as e:
-                    print(f"Error loading {session_key} run {i}: {e}")
-                    continue
+                    xs.append(np.stack(run_X))
+                    ys.append(np.array(run_y))
+                    print(f"Loaded {session_key} run {i}: X shape {xs[-1].shape}")
+            return np.concatenate(xs, axis=0), np.concatenate(ys, axis=0)
 
-        X = np.concatenate(X_list, axis=0)
-        y = np.concatenate(y_list, axis=0)
-        print(f"Total training data: X shape {X.shape}, y shape {y.shape}")
-        
-        # Load test data if available
-        if test_session_keys:
-            X_test_list = []
-            y_test_list = []
-            for session_key in test_session_keys:
-                test_dataset = splitted_ds[session_key]
-                for i, run in enumerate(test_dataset.datasets):
-                    try:
-                        run_X = []
-                        run_y = []
-                        for j in range(len(run)):
-                            x, target, _ = run[j]
-                            # Standardize length
-                            if x.shape[-1] > expected_length:
-                                x = x[..., :expected_length]
-                            elif x.shape[-1] < expected_length:
-                                padding = expected_length - x.shape[-1]
-                                x = np.pad(x, ((0, 0), (0, padding)), 'constant')
-                            
-                            run_X.append(x)
-                            run_y.append(target)
-                        
-                        X_test_list.append(np.stack(run_X))
-                        y_test_list.append(np.array(run_y))
-                        print(f"Loaded {session_key} run {i}: X shape {run_X.shape}")
-                    except Exception as e:
-                        print(f"Error loading {session_key} run {i}: {e}")
-                        continue
-            
-            if X_test_list:
-                X_test = np.concatenate(X_test_list, axis=0)
-                y_test = np.concatenate(y_test_list, axis=0)
-                print(f"Total test data: X shape {X_test.shape}, y shape {y_test.shape}")
-            else:
-                # No valid test data, split training
-                from sklearn.model_selection import train_test_split
-                X, X_test, y, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-        else:
-            # No test sessions, split training data
-            from sklearn.model_selection import train_test_split
-            X, X_test, y, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+        X, y = _load(train_session_keys)
+        X_test, y_test = _load(test_session_keys)
+        print(f"Train: X {X.shape}, y {y.shape}; Test: X {X_test.shape}, y {y_test.shape}")
 
-        # scale data
+        # TCFormer official protocol: val == test, last-epoch evaluation (no best-on-val selection).
+        # enable_checkpointing=False in train_pipeline ensures no implicit leakage from this choice.
+        X_val, y_val = X_test.copy(), y_test.copy()
+
         if self.preprocessing_dict["z_scale"]:
-            X, X_test = BaseDataModule._z_scale(X, X_test)
+            X, X_val, X_test = BaseDataModule._z_scale_tvt(X, X_val, X_test)
 
-        # make datasets
         self.train_dataset = BaseDataModule._make_tensor_dataset(X, y)
+        self.val_dataset = BaseDataModule._make_tensor_dataset(X_val, y_val)
         self.test_dataset = BaseDataModule._make_tensor_dataset(X_test, y_test)
 
 

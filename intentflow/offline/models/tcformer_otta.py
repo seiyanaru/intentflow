@@ -284,6 +284,7 @@ class TCFormerOTTA(ClassificationModule):
             tcn_kernel_size=kwargs.get("tcn_kernel_size", 3),
             tcn_depth=kwargs.get("tcn_depth", 2),
             tcn_drop=kwargs.get("tcn_drop", 0.2),
+            use_eca=kwargs.get("use_eca", True),
         )
 
         super().__init__(model=model, n_classes=n_classes, **kwargs)

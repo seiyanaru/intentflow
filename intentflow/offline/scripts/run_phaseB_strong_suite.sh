@@ -12,6 +12,7 @@ EVAL_CONFIG="${2:-configs/tcformer_otta/tcformer_otta_bs1.yaml}"
 GPU_ID="${3:-0}"
 SEED="${4:-0}"
 SUITE_TAG="${5:-$(date +%Y%m%d_%H%M%S)}"
+DATASET="${6:-bcic2a}"
 
 source "${CONDA_SH}"
 conda activate "${CONDA_ENV}"
@@ -19,13 +20,14 @@ conda activate "${CONDA_ENV}"
 cd "${OFFLINE_DIR}"
 chmod +x ./scripts/run_phaseB_condition.sh
 
-SUITE_ROOT="results/phaseB_strong_suite_${SUITE_TAG}_seed${SEED}"
+SUITE_ROOT="results/phaseB_strong_suite_${DATASET}_${SUITE_TAG}_seed${SEED}"
 mkdir -p "${SUITE_ROOT}"
 
 echo "[PhaseB-strong-suite] train config: ${TRAIN_CONFIG}"
 echo "[PhaseB-strong-suite] eval config:  ${EVAL_CONFIG}"
 echo "[PhaseB-strong-suite] gpu_id:       ${GPU_ID}"
 echo "[PhaseB-strong-suite] seed:         ${SEED}"
+echo "[PhaseB-strong-suite] dataset:      ${DATASET}"
 echo "[PhaseB-strong-suite] suite root:   ${SUITE_ROOT}"
 
 run_one() {
@@ -56,7 +58,8 @@ run_one() {
     "${lambda_shinv}" \
     "${result_root}" \
     "${shinv_mode}" \
-    "${lambda_aug}"
+    "${lambda_aug}" \
+    "${DATASET}"
 }
 
 run_one strong_plain 0.0 0.0 mean_logvar 0.5

@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m py_compile train_pipeline.py)",
+      "Bash(ls -lh /workspace-cloud/seiya.narukawa/intentflow/intentflow/offline/results/update_op_comparison_20260314_231817/*/final_acc*.json)",
+      "mcp__claude_ai_Notion__notion-fetch"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

@@ -5,7 +5,7 @@
 
 # general
 dataset_name: ""
-subject_ids: [1, 2, 3, 4, 5, 6, 7, 8, 9]
+subject_ids: "all"
 max_epochs: 1000
 max_epochs_2b: 500
 max_epochs_loso: 125
@@ -15,9 +15,9 @@ seed: 0
 # preprocessing
 z_scale: True
 interaug: True
-data_path: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
-data_path_2a_eval_labels: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/labels"
-data_path_2b: "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2b_gdf/"
+data_path: "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
+data_path_2a_eval_labels: "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/labels"
+data_path_2b: "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2b_gdf/"
 preprocessing:
   bcic2a:
     sfreq: 250
@@ -33,7 +33,7 @@ preprocessing:
     low_cut: null
     high_cut: null
     start: 0.0
-    stop: 3.0
+    stop: -0.5
     batch_size: 48
     test_batch_size: 1
   hgd:
@@ -41,7 +41,7 @@ preprocessing:
     low_cut: 4
     high_cut: null
     start: 0.0
-    stop: 4.0
+    stop: 0.0
     batch_size: 48
     test_batch_size: 1
     remove_artifacts: False
