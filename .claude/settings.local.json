@@ -3,7 +3,9 @@
     "allow": [
       "Bash(python -m py_compile train_pipeline.py)",
       "Bash(ls -lh /workspace-cloud/seiya.narukawa/intentflow/intentflow/offline/results/update_op_comparison_20260314_231817/*/final_acc*.json)",
-      "mcp__claude_ai_Notion__notion-fetch"
+      "mcp__claude_ai_Notion__notion-fetch",
+      "Bash(python -c ' *)",
+      "Bash(sleep 5 && tail -40 /tmp/proto_vs_policy_run.log 2>/dev/null; echo \"---bg id state---\")"
     ],
     "deny": [],
     "ask": []

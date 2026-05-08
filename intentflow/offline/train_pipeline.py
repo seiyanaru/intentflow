@@ -23,47 +23,27 @@ from utils.seed import seed_everything
 CONFIG_DIR = Path(__file__).resolve().parent / "configs"
 
 
-def _adapt_checkpoint_state_dict(model, state_dict):
-    """Handle known wrapper-prefix mismatches between source/eval model classes."""
-    model_keys = model.state_dict().keys()
-    ckpt_keys = state_dict.keys()
-
-    if (
-        any(k.startswith("model.model.") for k in model_keys)
-        and any(k.startswith("model.") for k in ckpt_keys)
-        and not any(k.startswith("model.model.") for k in ckpt_keys)
-    ):
-        remapped = {}
-        for key, value in state_dict.items():
-            if key.startswith("model."):
-                remapped["model.model." + key[len("model."):]] = value
-            else:
-                remapped[key] = value
-        return remapped
-
-    return state_dict
+RUNTIME_ADAPTER_PREFIXES = ("policy_otta.", "proto_otta.", "otta.", "replay_otta.")
 
 
-def _load_checkpoint_compatibly(model, state_dict):
-    """Load checkpoints while permitting narrowly scoped legacy-key gaps."""
-    state_dict = _adapt_checkpoint_state_dict(model, state_dict)
-    incompatible = model.load_state_dict(state_dict, strict=False)
-
-    allowed_missing = {
-        "model.conv_block.eca.conv.weight",
-        "model.model.conv_block.eca.conv.weight",
+def strip_runtime_adapter_keys(state_dict):
+    """Remove test-time sidecar modules accidentally saved in checkpoints."""
+    cleaned = {
+        key: value
+        for key, value in state_dict.items()
+        if not key.startswith(RUNTIME_ADAPTER_PREFIXES)
     }
-    missing = set(incompatible.missing_keys)
-    unexpected = set(incompatible.unexpected_keys)
+    removed = len(state_dict) - len(cleaned)
+    if removed:
+        print(f">>> Ignored {removed} runtime adapter checkpoint keys")
+    return cleaned
 
-    if unexpected or not missing.issubset(allowed_missing):
-        raise RuntimeError(
-            "Checkpoint incompatible with current model. "
-            f"missing_keys={sorted(missing)}, unexpected_keys={sorted(unexpected)}"
-        )
 
-    if missing:
-        print(f">>> Allowing legacy missing keys: {sorted(missing)}")
+def detach_runtime_adapters(model):
+    """Prevent transient OTTA sidecars from being written into future checkpoints."""
+    for attr in ("policy_otta", "proto_otta", "otta", "replay_otta"):
+        if hasattr(model, attr):
+            setattr(model, attr, None)
 
 # Main training and testing pipeline
 def train_and_test(config):
@@ -102,10 +82,9 @@ def train_and_test(config):
     config["model_kwargs"]["n_channels"] = datamodule_cls.channels
     config["model_kwargs"]["n_classes"] = datamodule_cls.classes
     
-    # Update data_path to absolute path if not set (fallback). 2b intentionally keeps None
-    # to route through MOABB (BNCI2014004) in load_bcic4.
-    if config["preprocessing"].get("data_path") is None and dataset_name != "bcic2b":
-        config["preprocessing"]["data_path"] = "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
+    # Update data_path to absolute path if not set (fallback)
+    if config["preprocessing"].get("data_path") is None:
+        config["preprocessing"]["data_path"] = "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
 
     # Parse subject IDs from config
     subj_cfg = config["subject_ids"]
@@ -168,8 +147,9 @@ def train_and_test(config):
                 raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
             print(f">>> Loading checkpoint: {ckpt_path}")
             import torch
-            ckpt = torch.load(ckpt_path, map_location="cpu")
-            _load_checkpoint_compatibly(model, ckpt["state_dict"])
+            ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+            state_dict = strip_runtime_adapter_keys(ckpt["state_dict"])
+            model.load_state_dict(state_dict)
             train_times.append(0.0)
         else:
             st_train = time.time()
@@ -226,6 +206,7 @@ def train_and_test(config):
 
         # Optionally save the trained model's weights
         if config.get("save_checkpoint", False):
+            detach_runtime_adapters(model)
             ckpt_path = result_dir / f"checkpoints/subject_{subject_id}_model.ckpt"
             trainer.save_checkpoint(ckpt_path)
    
@@ -285,6 +266,8 @@ def parse_arguments():
                         help="Path to BCIC2a evaluation labels (directory containing A0xE.mat or a mat file)")
     parser.add_argument("--checkpoint_dir", type=str, default=None,
                         help="Path to pre-trained checkpoints dir. Skips training, loads checkpoints for test-only.")
+    parser.add_argument("--subject_ids", type=str, default=None,
+                        help="Comma-separated subject IDs to override config (e.g. '2' or '2,7').")
     return parser.parse_args()
 
 # ----------------------------------------------
@@ -342,9 +325,7 @@ def run():
     config["preprocessing"]["z_scale"] = config["z_scale"]
     # Select appropriate data path based on dataset
     if args.dataset == "bcic2b":
-        # TCFormer official: use MOABB (BNCI2014004) for 2b so evaluation session labels
-        # are auto-resolved. Local GDF path lacks true-label .mat, so force None.
-        config["preprocessing"]["data_path"] = None
+        config["preprocessing"]["data_path"] = config.get("data_path_2b", config.get("data_path", None))
     else:
         config["preprocessing"]["data_path"] = config.get("data_path", None)
     if args.dataset == "bcic2a":
@@ -378,6 +359,12 @@ def run():
     # Pass checkpoint_dir for test-only mode
     if args.checkpoint_dir:
         config["checkpoint_dir"] = args.checkpoint_dir
+
+    if args.subject_ids:
+        ids = [int(s.strip()) for s in args.subject_ids.split(",") if s.strip()]
+        if not ids:
+            raise ValueError(f"--subject_ids parsed to empty list: {args.subject_ids!r}")
+        config["subject_ids"] = ids
 
     train_and_test(config)
 

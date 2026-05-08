@@ -11,6 +11,15 @@ def get_model_cls(model_name):
     elif model_name.lower() == "tcformer_otta":
         from models.tcformer_otta import TCFormerOTTA
         return TCFormerOTTA
+    elif model_name.lower() == "tcformer_proto_otta":
+        from models.tcformer_proto_otta import TCFormerProtoOTTA
+        return TCFormerProtoOTTA
+    elif model_name.lower() == "tcformer_policy_safe_otta":
+        from models.tcformer_policy_safe_otta import TCFormerPolicySafeOTTA
+        return TCFormerPolicySafeOTTA
+    elif model_name.lower() == "tcformer_replay_safe_otta":
+        from models.tcformer_replay_safe_otta import TCFormerReplaySafeOTTA
+        return TCFormerReplaySafeOTTA
     elif model_name.lower() == "tcformer_aug_shinv":
         from models.tcformer_aug_shinv import TCFormerAugShInv
         return TCFormerAugShInv

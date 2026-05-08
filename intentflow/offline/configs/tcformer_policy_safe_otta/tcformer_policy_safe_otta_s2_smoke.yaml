@@ -1,0 +1,107 @@
+# TCFormer Policy-SafeCommit OTTA — S2 smoke-safe config.
+
+dataset_name: ""
+subject_ids: [2]
+max_epochs: 1000
+max_epochs_2b: 500
+max_epochs_loso: 125
+max_epochs_loso_hgd: 77
+seed: 0
+
+z_scale: True
+interaug: True
+data_path: "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
+data_path_2a_eval_labels: "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/labels"
+data_path_2b: "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2b_gdf/"
+
+preprocessing:
+  bcic2a:
+    sfreq: 250
+    low_cut: null
+    high_cut: null
+    start: 0.0
+    stop: 4.0
+    batch_size: 48
+    test_batch_size: 1
+    num_workers: 0
+  bcic2b:
+    sfreq: 250
+    low_cut: null
+    high_cut: null
+    start: 0.0
+    stop: 3.0
+    batch_size: 48
+    test_batch_size: 1
+    num_workers: 0
+  hgd:
+    sfreq: 250
+    low_cut: 4
+    high_cut: null
+    start: 0.0
+    stop: 4.0
+    batch_size: 48
+    test_batch_size: 1
+    num_workers: 0
+    remove_artifacts: False
+
+model: "tcformer_policy_safe_otta"
+model_kwargs:
+  F1: 32
+  temp_kernel_lengths: [20, 32, 64]
+  d_group: 16
+  D: 2
+  pool_length_1: 8
+  pool_length_2: 7
+  dropout_conv: 0.4
+  use_group_attn: True
+  q_heads: 4
+  kv_heads: 2
+  trans_depth: 2
+  trans_dropout: 0.4
+  tcn_depth: 2
+  kernel_length_tcn: 4
+  dropout_tcn: 0.3
+  lr: 0.0009
+  beta_1: 0.5
+  weight_decay: 0.001
+  optimizer: "adam"
+  scheduler: True
+  warmup_epochs: 20
+  warmup_epochs_loso: 3
+
+  # State / policy thresholds
+  pmax_threshold: 0.7
+  sal_threshold: 0.5
+  energy_threshold: null
+  energy_quantile: 0.95
+  energy_temperature: 1.0
+  abstain_on_ood: true
+  energy_blocks_update: true
+  energy_abstain_margin: 2.0
+  energy_abstain_z: 6.0
+  shallow_var_risk_threshold: 0.15
+
+  # Operators
+  prototype_fusion_alpha: 0.2
+  prototype_logit_scale: 1.0
+  proto_momentum: 0.05
+  logit_bias_momentum: 0.02
+  max_logit_bias: 0.25
+  bn_momentum: 0.01
+  bn_shallow_mean_momentum: null
+  bn_shallow_var_momentum: null
+  bn_deep_mean_momentum: null
+  bn_deep_var_momentum: null
+
+  # SafeCommit
+  margin_tolerance: 0.02
+  sal_tolerance: 0.05
+  prototype_margin_tolerance: 0.05
+  energy_tolerance: 0.0
+  max_bn_drift: 1.0
+  max_shallow_var_delta: 0.25
+  min_neuro_score: null
+  history_window: 32
+  enable_otta: true
+
+save_checkpoint: True
