@@ -7,6 +7,10 @@
 - `working-conventions.md`: 命名、成果物の配置、報告期待値、実験衛生。
 - `active-questions.md`: 現在の研究課題、詰まりやすい論点、再訪すべき意思決定。
 
+## 実験知見・研究方向（2605）
+- `dc-replay-empirical-ceilings.md`: TCFormer凍結+予測補正型OTTAの精度天井（L1 ≲ +3.4pp、3データセット）と L3 model-state commit の no-op。
+- `research-direction-2605.md`: commitless 主手法は筋が悪い。safety・理解主導へ方向転換。外部競合 BFT 2026 要精読。
+
 ## メモリに入れるもの
 - 安定した研究方針
 - 信頼できるベースライン前提
