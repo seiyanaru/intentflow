@@ -1,0 +1,6 @@
+trial_idx,candidate_index,operator,sim_score,reason
+24,0,shallow_var_update,-1.469851e-05,replay_sim_score_drop
+24,1,hybrid_BN_update,-8.043051e-05,replay_sim_score_drop
+24,2,deep_BN_update,-3.057718e-05,replay_sim_score_drop
+24,3,prototype_update,-5.668402e-06,replay_sim_score_drop
+24,4,logit_bias_update,1.949072e-06,safe_replay

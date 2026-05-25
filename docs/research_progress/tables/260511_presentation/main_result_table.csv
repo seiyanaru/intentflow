@@ -1,0 +1,6 @@
+method,mean_acc,delta_vs_source,worst_delta_vs_source,hsc_0p5,note
+source_only,82.72,0.0,0.0,0/9,main comparison row
+policy_safe_no_shallow,83.14,0.42,-0.35,0/9,
+replay_safe_uniform,83.41,0.69,-0.35,0/9,main comparison row
+replay_h6_weighted,83.22,0.5,-0.35,0/9,
+hybrid@0.01_reference,81.98,0.35,-0.34,0/9,"previous seminar value (5 seed mean, aug-True). Not re-evaluated in this regime."

@@ -117,6 +117,10 @@ def main() -> None:
                 "mean_acc": mean(accs),
                 "mean_delta_vs_source": mean(deltas),
                 "worst_delta_vs_source": min(deltas) if deltas else None,
+                # HSC: Harmful Subject Count. Keep the old JSON key for
+                # compatibility with previous reports, but present HSC in new
+                # tables.
+                "hsc_at_0p5": sum(1 for d in deltas if d < -0.5),
                 "ntr_s_at_0p5": sum(1 for d in deltas if d < -0.5),
                 "per_unit": table[variant],
             }
@@ -157,7 +161,7 @@ def main() -> None:
     json_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
 
     md = [f"# Replay Variant Sweep Summary ({args.plan.upper()})", ""]
-    md.append("| variant | n | mean | Δmean vs source | worst vs source | NTR-S |")
+    md.append("| variant | n | mean | Δmean vs source | worst vs source | HSC@0.5pp |")
     md.append("|---|---:|---:|---:|---:|---:|")
     for row in rows:
         if row["n"] == 0:
@@ -166,7 +170,7 @@ def main() -> None:
             f"| {row['variant']} | {row['n']} | {fmt(row['mean_acc'])} | "
             f"{fmt(row['mean_delta_vs_source'], signed=True)} | "
             f"{fmt(row['worst_delta_vs_source'], signed=True)} | "
-            f"{row['ntr_s_at_0p5']}/{row['n']} |"
+            f"{row['hsc_at_0p5']}/{row['n']} |"
         )
 
     if args.plan == "c":

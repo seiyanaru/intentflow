@@ -1,0 +1,17 @@
+subject,seed,method,accuracy,mean_acc,std_acc,delta_vs_source_if_available,source_file
+S7,0,source_only,86.81,89.582,1.962,missing,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/a1_9subject_no_shallow_20260505_182651/eval/s7/source_only/results.txt
+S7,1,source_only,92.36,89.582,1.962,missing,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/b_5seed_4subj_20260506_005153/summary.json
+S7,2,source_only,89.58,89.582,1.962,missing,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/b_5seed_4subj_20260506_005153/summary.json
+S7,3,source_only,89.58,89.582,1.962,missing,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/b_5seed_4subj_20260506_005153/summary.json
+S7,0,policy_safe_no_shallow,88.19,90.537,1.674,1.38,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/a1_9subject_no_shallow_20260505_182651/eval/s7/policy_safe_no_shallow/results.txt
+S7,1,policy_safe_no_shallow,92.71,90.537,1.674,0.35,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/b_5seed_4subj_20260506_005153/summary.json
+S7,2,policy_safe_no_shallow,91.32,90.537,1.674,1.74,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/b_5seed_4subj_20260506_005153/summary.json
+S7,3,policy_safe_no_shallow,89.93,90.537,1.674,0.35,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/b_5seed_4subj_20260506_005153/summary.json
+S7,0,replay_safe_uniform,89.24,91.407,1.479,2.43,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/replay_safe_9subject_20260505_212942/eval/s7/replay_safe_default/results.txt
+S7,1,replay_safe_uniform,93.4,91.407,1.479,1.04,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/b_5seed_4subj_20260506_005153/summary.json
+S7,2,replay_safe_uniform,91.67,91.407,1.479,2.09,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/b_5seed_4subj_20260506_005153/summary.json
+S7,3,replay_safe_uniform,91.32,91.407,1.479,1.74,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/b_5seed_4subj_20260506_005153/summary.json
+S7,0,replay_h6_weighted,89.24,91.58,1.538,2.43,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/replay_h6_9subject_20260506_004038/eval/s7/replay_h6_weighted/results.txt
+S7,1,replay_h6_weighted,93.4,91.58,1.538,1.04,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/b_5seed_4subj_20260506_005153/summary.json
+S7,2,replay_h6_weighted,92.36,91.58,1.538,2.78,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/b_5seed_4subj_20260506_005153/summary.json
+S7,3,replay_h6_weighted,91.32,91.58,1.538,1.74,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/b_5seed_4subj_20260506_005153/summary.json

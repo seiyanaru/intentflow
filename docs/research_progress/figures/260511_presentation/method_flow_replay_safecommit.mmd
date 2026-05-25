@@ -1,0 +1,17 @@
+flowchart TD
+    T["trial t 到着"] --> S["StateExtractor"]
+    S --> P["RuleBasedPolicy<br>candidate operators 提案"]
+    P --> Loop{"for each op"}
+    Loop --> SN["snapshot model state"]
+    SN --> AP["仮 apply"]
+    AP --> T1{"Tier 1 (即時ガード)<br>margin / sal / proto / energy / bn_drift"}
+    T1 -->|fail| R1["reject (tier1)"]
+    T1 -->|pass| RP["replay buffer (32 trial)<br>fused logits で forward"]
+    RP --> EV["sim_score = w_acc·Δacc + w_mar·Δmargin + w_pro·Δproto_cos"]
+    EV --> T2{"Tier 2 (replay)<br>sim_score > 0?"}
+    T2 -->|yes| C["COMMIT"]
+    T2 -->|no| R2["reject (sim_score_drop)"]
+    R1 --> Loop
+    R2 --> RES["restore snapshot"]
+    RES --> Loop
+    C --> ADM["現 trial も<br>pmax > 0.85 AND SAL > 0.6 なら<br>buffer に FIFO admit"]

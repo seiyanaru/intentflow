@@ -1,0 +1,154 @@
+# TCFormer Deferred-Commit Replay OTTA — S2 smoke config.
+# This variant separates L1 correction, L2 external memory, and L3 replay-gated commit.
+
+dataset_name: ""
+subject_ids: [2]
+max_epochs: 1000
+max_epochs_2b: 500
+max_epochs_loso: 125
+max_epochs_loso_hgd: 77
+seed: 0
+
+z_scale: True
+interaug: True
+data_path: "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
+data_path_2a_eval_labels: "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/labels"
+data_path_2b: "/mnt/data/seiya.narukawa/intentflow/data/raw/BCICIV_2b_gdf/"
+
+preprocessing:
+  bcic2a:
+    sfreq: 250
+    low_cut: null
+    high_cut: null
+    start: 0.0
+    stop: 4.0
+    batch_size: 48
+    test_batch_size: 1
+    num_workers: 0
+  bcic2b:
+    sfreq: 250
+    low_cut: null
+    high_cut: null
+    start: 0.0
+    stop: 3.0
+    batch_size: 48
+    test_batch_size: 1
+    num_workers: 0
+  hgd:
+    sfreq: 250
+    low_cut: 4
+    high_cut: null
+    start: 0.0
+    stop: 4.0
+    batch_size: 48
+    test_batch_size: 1
+    num_workers: 0
+    remove_artifacts: False
+
+model: "tcformer_deferred_commit_replay_otta"
+model_kwargs:
+  F1: 32
+  temp_kernel_lengths: [20, 32, 64]
+  d_group: 16
+  D: 2
+  pool_length_1: 8
+  pool_length_2: 7
+  dropout_conv: 0.4
+  use_group_attn: True
+  q_heads: 4
+  kv_heads: 2
+  trans_depth: 2
+  trans_dropout: 0.4
+  tcn_depth: 2
+  kernel_length_tcn: 4
+  dropout_tcn: 0.3
+  lr: 0.0009
+  beta_1: 0.5
+  weight_decay: 0.001
+  optimizer: "adam"
+  scheduler: True
+  warmup_epochs: 20
+  warmup_epochs_loso: 3
+
+  # State / policy thresholds
+  pmax_threshold: 0.7
+  sal_threshold: 0.5
+  energy_threshold: null
+  energy_quantile: 0.95
+  energy_temperature: 1.0
+  abstain_on_ood: true
+  energy_blocks_update: true
+  energy_abstain_margin: 2.0
+  energy_abstain_z: 6.0
+  shallow_var_risk_threshold: 0.15
+
+  # Model-state operators (L3 starts intentionally small)
+  allowed_operators: ["no_update", "prototype_update", "logit_bias_update", "abstain"]
+  prototype_fusion_alpha: 0.2
+  prototype_logit_scale: 1.0
+  proto_momentum: 0.05
+  logit_bias_momentum: 0.02
+  max_logit_bias: 0.25
+  bn_momentum: 0.01
+  bn_shallow_mean_momentum: null
+  bn_shallow_var_momentum: null
+  bn_deep_mean_momentum: null
+  bn_deep_var_momentum: null
+
+  # Tier-1 SafeCommit (immediate guards, inherited)
+  margin_tolerance: 0.02
+  sal_tolerance: 0.05
+  prototype_margin_tolerance: 0.05
+  energy_tolerance: 0.0
+  max_bn_drift: 1.0
+  max_shallow_var_delta: 0.25
+  min_neuro_score: null
+  history_window: 32
+  enable_otta: true
+
+  # Replay / external memory validation
+  replay_capacity: 32
+  replay_min_size: 16
+  replay_per_class_min: 2
+  replay_seed_per_class: 8
+  replay_warmup_source: true
+  sim_score_tolerance: 0.0
+  replay_acc_weight: 1.0
+  replay_margin_weight: 0.3
+  replay_proto_weight: 0.3
+  replay_weight_mode: "uniform"
+  require_replay_ready: true
+
+  # L1: prediction correction
+  dc_enable_correction: true
+  dc_correction_mode: "memory_prior"
+  dc_prior_correction_strength: 0.2
+  dc_max_prior_correction: 1.0
+  dc_min_memory_for_correction: 8
+
+  # L2: external memory admission
+  dc_enable_memory_update: true
+  dc_memory_admission_threshold: 0.55
+  dc_memory_confidence_weight: 0.35
+  dc_memory_density_weight: 0.15
+  dc_memory_temporal_weight: 0.15
+  dc_memory_prototype_weight: 0.15
+  dc_memory_balance_weight: 0.10
+  dc_memory_uncertainty_weight: 0.15
+  dc_memory_ood_weight: 0.20
+  dc_memory_disagreement_weight: 0.10
+
+  # L3: deferred model-state commit
+  dc_commit_mode: "replay_gated"
+  dc_min_memory_for_commit: 16
+  dc_commit_cooldown: 8
+  dc_prior_drift_threshold: 0.08
+  dc_proto_drift_threshold: 0.08
+  dc_proto_drift_reference: 0.75
+  dc_drift_score_threshold: 0.08
+  dc_prior_drift_weight: 1.0
+  dc_proto_drift_weight: 1.0
+  dc_random_commit_prob: 0.05
+  dc_allowed_commit_operators: ["logit_bias_update", "prototype_update"]
+
+save_checkpoint: True

@@ -20,6 +20,9 @@ def get_model_cls(model_name):
     elif model_name.lower() == "tcformer_replay_safe_otta":
         from models.tcformer_replay_safe_otta import TCFormerReplaySafeOTTA
         return TCFormerReplaySafeOTTA
+    elif model_name.lower() == "tcformer_deferred_commit_replay_otta":
+        from models.tcformer_deferred_commit_replay_otta import TCFormerDeferredCommitReplayOTTA
+        return TCFormerDeferredCommitReplayOTTA
     elif model_name.lower() == "tcformer_aug_shinv":
         from models.tcformer_aug_shinv import TCFormerAugShInv
         return TCFormerAugShInv

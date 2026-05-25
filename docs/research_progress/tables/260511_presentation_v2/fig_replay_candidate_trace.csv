@@ -1,0 +1,6 @@
+subject,trial_index,candidate_operator,sim_score,decision,reject_reason,committed_operator,source_file
+S2,24,shallow_var_update,-1.469851e-05,reject,replay_sim_score_drop,logit_bias_update,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/_smoke_replay_v3_s2_212138/replay_safe_otta_stats_s2_tcformer_replay_safe_otta.npz
+S2,24,hybrid_BN_update,-8.043051e-05,reject,replay_sim_score_drop,logit_bias_update,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/_smoke_replay_v3_s2_212138/replay_safe_otta_stats_s2_tcformer_replay_safe_otta.npz
+S2,24,deep_BN_update,-3.057718e-05,reject,replay_sim_score_drop,logit_bias_update,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/_smoke_replay_v3_s2_212138/replay_safe_otta_stats_s2_tcformer_replay_safe_otta.npz
+S2,24,prototype_update,-5.668402e-06,reject,replay_sim_score_drop,logit_bias_update,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/_smoke_replay_v3_s2_212138/replay_safe_otta_stats_s2_tcformer_replay_safe_otta.npz
+S2,24,logit_bias_update,1.949072e-06,commit,,logit_bias_update,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/_smoke_replay_v3_s2_212138/replay_safe_otta_stats_s2_tcformer_replay_safe_otta.npz

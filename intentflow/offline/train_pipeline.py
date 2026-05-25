@@ -23,7 +23,7 @@ from utils.seed import seed_everything
 CONFIG_DIR = Path(__file__).resolve().parent / "configs"
 
 
-RUNTIME_ADAPTER_PREFIXES = ("policy_otta.", "proto_otta.", "otta.", "replay_otta.")
+RUNTIME_ADAPTER_PREFIXES = ("policy_otta.", "proto_otta.", "otta.", "replay_otta.", "dc_replay_otta.")
 
 
 def strip_runtime_adapter_keys(state_dict):
@@ -41,7 +41,7 @@ def strip_runtime_adapter_keys(state_dict):
 
 def detach_runtime_adapters(model):
     """Prevent transient OTTA sidecars from being written into future checkpoints."""
-    for attr in ("policy_otta", "proto_otta", "otta", "replay_otta"):
+    for attr in ("policy_otta", "proto_otta", "otta", "replay_otta", "dc_replay_otta"):
         if hasattr(model, attr):
             setattr(model, attr, None)
 

@@ -1,0 +1,6 @@
+method,mean_acc,mean_delta_vs_source,worst_delta_vs_source,ntr_s_0p5,is_reference,source_file
+source_only,82.717,0.0,0.0,0/9,0,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/c_aug_true_9subj_20260506_004923/summary.json
+policy_safe_no_shallow,83.141,0.424,-0.35,0/9,0,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/c_aug_true_9subj_20260506_004923/summary.json
+replay_safe_uniform,83.41,0.693,-0.35,0/9,0,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/c_aug_true_9subj_20260506_004923/summary.json
+replay_h6_weighted,83.217,0.5,-0.35,0/9,0,/mnt/data/seiya.narukawa/intentflow/intentflow/offline/results/c_aug_true_9subj_20260506_004923/summary.json
+hybrid@0.01_reference,81.98,missing,-0.34,0/9,1,"previous seminar value, not re-evaluated in this regime"

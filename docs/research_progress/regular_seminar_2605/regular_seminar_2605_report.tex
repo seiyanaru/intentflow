@@ -1,0 +1,392 @@
+\documentclass[a4paper,11pt]{ltjsarticle}
+\usepackage{luatexja}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{geometry}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\geometry{margin=24mm}
+\graphicspath{{figures/}}
+
+\title{EEG-MI cross-session OTTA における安全な適応方針の検討\\
+\large Replay-SafeCommit から Commitless Memory-Corrected OTTA へ}
+\author{史研究室 M2 \quad 生川 聖也}
+\date{2026年度 前期定期ゼミ}
+
+\newcommand{\source}{\texttt{source\_only}}
+\newcommand{\replay}{\texttt{replay\_safe\_uniform}}
+\newcommand{\hsc}{HSC@0.5pp}
+\newcommand{\pp}{\mathrm{pp}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本研究は，EEG Motor Imagery (EEG-MI) の cross-session 設定において，test-time stream に逐次適応する Online Test-Time Adaptation (OTTA) を安全に行う方法を検討するものである．
+前回定期ゼミでは，Active BCI の実用化を阻む非定常性に対し，Test-Time Training を用いた適応的モデルを検討した．
+その後，モデルを更新する OTTA は session drift に追従できる一方で，誤更新により一部被験者の性能を大きく悪化させる危険があることが明確になった．
+260511 の班ゼミでは，候補更新を replay buffer 上で検証してから採用する Replay-SafeCommit を提案し，9被験者・1 seed の条件で \source 82.72\% に対して 83.41\% (+0.69pp)，\hsc=0/9 を確認した．
+今回追加で行った 72h sweep では，Replay-SafeCommit の自然な拡張として，prediction correction，external memory，model-state commit を分ける DC-Replay 系を検証した．
+結果として，DC 系は Plan C で最大 83.95\% (+1.23pp) まで平均精度を伸ばしたが，\hsc=1/9 となり，Plan B の seed 安定性評価では best DC が 76.13\% (+0.49pp) で \hsc=4/12 となった．
+さらに診断ログから，最も良い DC 設定では model-state commit が 0 回であり，現在の改善は L3 の deferred commit ではなく，L1/L2 の非破壊な予測補正と external memory に由来する可能性が高いと分かった．
+したがって現時点の主張は，Replay-SafeCommit を安全な主結果として残しつつ，次段階では Commitless Memory-Corrected OTTA として，model state を動かさない補正器と memory admission の信頼性を高める方向へ修正するのが妥当である．
+\end{abstract}
+
+\section{研究背景}
+
+Active BCI は，ユーザーの自発的な脳活動，特に運動想起に伴う EEG パターンを用いて外部機器を制御する技術である．
+本研究では，BCI Competition IV Dataset 2a を中心に，4クラス運動想起分類を対象としている．
+EEG-MI の実用化における大きな問題は，学習時と運用時の分布が一致しないことである．
+同一被験者であっても，session が変わると疲労，集中度，電極状態，ノイズ混入により EEG の特徴分布が変化する．
+そのため，session T で学習した静的モデルを session E にそのまま適用すると性能が低下しやすい．
+
+この問題に対し，OTTA は target session の unlabeled stream を用いて逐次的にモデルを適応させる．
+OTTA は session drift に追従できる可能性を持つが，正解ラベルを使えないため，誤った pseudo-label や artifact をもとにモデル状態を更新してしまう危険がある．
+特に EEG-MI では，高い softmax confidence が真の正解を保証しない．
+一度 model state を誤って更新すると，その悪影響は現在 trial だけでなく以降の trial に残る．
+したがって，本研究の中心課題は「平均精度を上げる」だけではなく，「一部の被験者を大きく悪化させない」安全な OTTA 方針を設計することである．
+
+\section{評価指標}
+
+本研究では，平均精度と subject-level harm を分けて評価する．
+表\ref{tab:metrics}に主要な評価指標を示す．
+
+\begin{table}[h]
+  \centering
+  \caption{本研究で用いる評価指標}
+  \label{tab:metrics}
+  \begin{tabular}{lll}
+    \toprule
+    指標 & 見るもの & 目的 \\
+    \midrule
+    mean accuracy & 全被験者または全 unit の平均精度 & 全体性能 \\
+    $\Delta$ vs source & \source からの改善幅 & OTTA の上乗せ効果 \\
+    worst $\Delta$ & 最も悪化した unit の変化量 & worst-case harm \\
+    \hsc & 0.5pp以上悪化した unit 数 & subject-level harm \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+ここで unit は，Plan C では被験者，Plan B では被験者と seed の組を表す．
+平均精度が高くても \hsc が大きい手法は，BCI 応用では採用しにくい．
+そのため，安全性を考える場合には，mean $\Delta$ と \hsc，worst $\Delta$ を同時に見る必要がある．
+
+\section{260511発表: Replay-SafeCommit}
+
+260511 の班ゼミでは，policy\_safe\_otta の immediate SafeCommit が forward-only OTTA では十分に機能しないことを問題として整理した．
+BN 統計や prototype などの更新は，現在 trial の forward 後に適用されるため，その効果は主に将来の trial に表れる．
+したがって，current trial の margin や SAL の before/after だけで commit の真の効果を測るのは構造的に難しい．
+
+この問題に対し，Replay-SafeCommit では，過去の高信頼 trial を replay buffer に保持し，候補更新を仮適用した後に replay buffer 全件を再評価する．
+評価には，pseudo-label との一致率，top1-top2 margin，prototype cosine の変化を用いる．
+
+\[
+  \mathrm{sim\_score}
+  = w_{\mathrm{acc}}\Delta \mathrm{replay\_acc}
+  + w_{\mathrm{margin}}\Delta \mathrm{replay\_margin}
+  + w_{\mathrm{proto}}\Delta \mathrm{replay\_proto\_cos}
+\]
+
+候補 operator は，prototype update，logit bias update，deep BN update，hybrid BN update，shallow variance update，no update などである．
+候補を仮適用し，\(\mathrm{sim\_score} > 0\) の場合のみ commit し，それ以外は rollback する．
+これにより，現在 trial では見えない model-state update の影響を，過去の高信頼 target samples に対する simulated reward として近似する．
+
+表\ref{tab:replay-result}に 260511 時点の主結果を示す．
+
+\begin{table}[h]
+  \centering
+  \caption{Replay-SafeCommit の主結果}
+  \label{tab:replay-result}
+  \begin{tabular}{lrrrr}
+    \toprule
+    method & mean & $\Delta$ vs source & worst $\Delta$ & \hsc \\
+    \midrule
+    \source & 82.72 & +0.00 & +0.00 & 0/9 \\
+    \texttt{policy\_safe\_no\_shallow} & 83.14 & +0.42 & -0.35 & 0/9 \\
+    \replay & \textbf{83.41} & \textbf{+0.69} & -0.35 & \textbf{0/9} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+この結果から，Replay-SafeCommit は \source に対して平均精度を改善しつつ，0.5pp以上悪化した被験者を出さないことが確認できた．
+この段階での重要な到達点は，強い補正器を作れたことではなく，危険な更新候補を採用前に検証する safety mechanism を構成できたことである．
+
+\section{教授フィードバックと設計修正}
+
+260511 の発表後，教授からは，候補を増やす方向はよいが，計算量や遅延を考えると，候補を根拠を持って選ぶ必要があるという指摘があった．
+また，すべての入力に対して model-state update を検討するのではなく，適応判断そのものを絞る設計も考えられるというフィードバックがあった．
+
+このフィードバックを受け，設計思想を「候補を増やす」から，「適応の責務を分ける」方向へ修正した．
+具体的には，OTTA の処理を以下の3階層に分けた．
+
+\begin{table}[h]
+  \centering
+  \caption{DC-Replay の3階層設計}
+  \label{tab:three-levels}
+  \begin{tabular}{p{0.20\textwidth}p{0.32\textwidth}p{0.36\textwidth}}
+    \toprule
+    階層 & 役割 & 状態とリスク \\
+    \midrule
+    L1 Prediction Correction & 現在 trial の posterior を補正する & 原則として model state を変えないため低リスク \\
+    L2 External Memory & 信頼できる target 情報を蓄積する & 直接はモデルを壊さないが，後続判断を汚染し得る \\
+    L3 Model-State Commit & 持続的 drift がある場合のみモデル状態を更新する & BN/prototype/logit bias を変えるため高リスク \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+この設計では，一時的な予測不安定性を L1 で吸収し，信頼できる target 情報のみ L2 に蓄積し，持続的な session drift が確認された場合にのみ L3 の model-state commit を行う．
+当初は，この階層型方針を DC-Replay OTTA として実装し，L3 の replay-gated commit が Replay-SafeCommit の自然な拡張として機能するかを検証した．
+
+\section{今回の72h sweep}
+
+今回の追加検証では，DC-Replay 系の複数 variant を Plan C と Plan B の2条件で評価した．
+Plan C は 9被験者・1 seed の横断評価であり，Plan B は 4被験者 \(\times\) 3 seed の seed 安定性評価である．
+評価した variant は，L1 correction の有無，L2 memory update の有無，L3 commit の有無と gate の種類を切り分けるように設計した．
+
+\begin{table}[h]
+  \centering
+  \caption{今回比較した主要 variant}
+  \label{tab:variants}
+  \begin{tabular}{lccc}
+    \toprule
+    variant & L1 correction & L2 memory & L3 commit \\
+    \midrule
+    \source & なし & なし & なし \\
+    \replay & なし & replay buffer & replay-safe commit \\
+    \texttt{dc\_correction\_static\_only} & あり & なし & なし \\
+    \texttt{dc\_correction\_memory\_no\_commit} & あり & あり & なし \\
+    \texttt{dc\_random\_sparse} & あり & あり & random commit \\
+    \texttt{dc\_commit\_no\_replay\_gate} & あり & あり & replay gate なし \\
+    \texttt{dc\_replay\_gated} & あり & あり & replay-gated commit \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+この比較により，次の論点を切り分けることを狙った．
+第一に，prediction correction 単体で効果があるか．
+第二に，external memory update が精度に寄与するか．
+第三に，commit 回数を減らしただけなのか，replay gate が実際に有効なのか．
+第四に，L3 model-state commit が現在の改善の主因なのか．
+
+\section{結果: Plan C}
+
+Plan C の主要結果を図\ref{fig:plan-c}と表\ref{tab:plan-c}に示す．
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig_plan_c_key_results.png}
+  \caption{Plan C における主要 variant の平均精度}
+  \label{fig:plan-c}
+\end{figure}
+
+\begin{table}[h]
+  \centering
+  \caption{Plan C の主要結果}
+  \label{tab:plan-c}
+  \begin{tabular}{lrrrr}
+    \toprule
+    method & mean & $\Delta$ & worst $\Delta$ & \hsc \\
+    \midrule
+    \source & 82.72 & +0.00 & +0.00 & 0/9 \\
+    \replay & 83.41 & +0.69 & -0.35 & 0/9 \\
+    \texttt{dc\_corr\_alpha\_01} & 83.33 & +0.62 & +0.00 & 0/9 \\
+    \texttt{dc\_grid\_a01\_m65} & 83.37 & +0.66 & -0.35 & 0/9 \\
+    \texttt{dc\_correction\_memory\_no\_commit} & 83.57 & +0.85 & -1.04 & 1/9 \\
+    \texttt{dc\_grid\_a04\_m55\_tol5e5} & \textbf{83.95} & \textbf{+1.23} & -1.38 & 1/9 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Plan C では，DC 系の最高設定が mean 83.95\%，\source から +1.23pp を達成した．
+これは \replay の 83.41\% を上回る．
+一方で，この best DC は worst $\Delta=-1.38$pp，\hsc=1/9 であり，安全制約を完全には満たしていない．
+安全制約を \hsc=0/9 に固定すると，最も高いのは \replay の 83.41\% である．
+DC 系にも \hsc=0/9 の設定は存在するが，例えば \texttt{dc\_grid\_a01\_m65} は 83.37\% であり，\replay にわずかに届かない．
+
+したがって，Plan C の結果は，DC 系の accuracy signal が本物であることを示す一方で，安全性込みでは Replay-SafeCommit がまだ最も堅いことも示している．
+
+\section{結果: Plan B}
+
+Plan B の主要結果を図\ref{fig:plan-b}と表\ref{tab:plan-b}に示す．
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig_plan_b_key_results.png}
+  \caption{Plan B における seed 安定性評価}
+  \label{fig:plan-b}
+\end{figure}
+
+\begin{table}[h]
+  \centering
+  \caption{Plan B の主要結果}
+  \label{tab:plan-b}
+  \begin{tabular}{lrrrr}
+    \toprule
+    method & mean & $\Delta$ & worst $\Delta$ & \hsc \\
+    \midrule
+    \source & 75.63 & +0.00 & +0.00 & 0/12 \\
+    \replay & 76.01 & +0.38 & -0.69 & 1/12 \\
+    \texttt{dc\_correction\_memory\_no\_commit} & 75.90 & +0.26 & -1.04 & 3/12 \\
+    \texttt{dc\_grid\_a04\_m55\_tol5e5} & 76.07 & +0.44 & -1.73 & 4/12 \\
+    \texttt{dc\_grid\_a08\_m45} & \textbf{76.13} & \textbf{+0.49} & -1.04 & 4/12 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Plan B では，DC 系の best mean は \texttt{dc\_grid\_a08\_m45} の 76.13\% であり，\source から +0.49pp，\replay から +0.11pp であった．
+しかし，\hsc=4/12 であり，seed を跨いだ安定性は悪い．
+一方で，\hsc \(\leq 1\) という安全制約を置くと，\replay が 76.01\%，\hsc=1/12 で最良となる．
+
+被験者別に見ると，DC 系は S2 と S7 を改善しやすいが，S4 と S6 の複数 seed で悪化しやすい．
+図\ref{fig:subject-seed}は，Plan B における被験者ごとの seed-mean delta を示している．
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig_plan_b_subject_seed_delta.png}
+  \caption{Plan B における被験者別 seed-mean delta}
+  \label{fig:subject-seed}
+\end{figure}
+
+この結果は，DC 系の補正が hard subject を救う可能性を持つ一方で，補正が不要または危険な subject に対して過補正として働くことを示している．
+
+\section{Safety--Gain tradeoff}
+
+図\ref{fig:tradeoff}に，Plan C と Plan B における safety--gain tradeoff を示す．
+横軸は \source に対する mean $\Delta$，縦軸は worst $\Delta$ であり，右上に近いほど望ましい．
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.98\linewidth]{fig_safety_tradeoff.png}
+  \caption{Safety--gain tradeoff}
+  \label{fig:tradeoff}
+\end{figure}
+
+Plan C では，DC high mean は右へ大きく進むが，下方向にも動いており，平均改善と worst-case harm の tradeoff が見える．
+Plan B では，\replay は平均改善こそ DC best より小さいが，worst $\Delta$ と \hsc の観点で比較的安全側に位置する．
+したがって，現段階では DC best を主結果にするよりも，Replay-SafeCommit を安全な主結果として残し，DC 系を補正力向上の探索結果として扱うのが妥当である．
+
+\section{L3 commit 診断}
+
+今回の最も重要な発見は，DC 系の改善が L3 model-state commit では説明できない点である．
+表\ref{tab:l3}と図\ref{fig:l3}に L3 commit diagnostics を示す．
+
+\begin{table}[h]
+  \centering
+  \caption{L3 commit diagnostics}
+  \label{tab:l3}
+  \begin{tabular}{llrrrr}
+    \toprule
+    plan & variant & $\Delta$ & \hsc & model commit & memory admitted \\
+    \midrule
+    C & \texttt{dc\_correction\_memory\_no\_commit} & +0.85 & 1 & 0 & 769 \\
+    C & \texttt{dc\_replay\_gated} & +0.85 & 1 & 111 & 769 \\
+    C & \texttt{dc\_commit\_no\_replay\_gate} & +0.85 & 1 & 150 & 769 \\
+    C & \texttt{dc\_grid\_a04\_m55\_tol5e5} & +1.23 & 1 & 0 & 750 \\
+    \midrule
+    B & \texttt{dc\_correction\_memory\_no\_commit} & +0.26 & 3 & 0 & 743 \\
+    B & \texttt{dc\_replay\_gated} & +0.26 & 3 & 101 & 743 \\
+    B & \texttt{dc\_commit\_no\_replay\_gate} & +0.26 & 3 & 153 & 743 \\
+    B & \texttt{dc\_grid\_a04\_m55\_tol5e5} & +0.44 & 4 & 0 & 707 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[h]
+  \centering
+  \includegraphics[width=0.95\linewidth]{fig_l3_commit_diagnostics.png}
+  \caption{L3 commit 回数と精度改善の関係}
+  \label{fig:l3}
+\end{figure}
+
+Plan C では，\texttt{dc\_correction\_memory\_no\_commit}，\texttt{dc\_replay\_gated}，\texttt{dc\_commit\_no\_replay\_gate} がすべて同じ 83.57\% であるにもかかわらず，model commit 回数はそれぞれ 0，111，150 と大きく異なる．
+さらに，Plan C の最高精度である \texttt{dc\_grid\_a04\_m55\_tol5e5} は model commit が 0 回である．
+Plan B でも同様に，commit 回数が異なる variant が同じ精度に収束している．
+
+この事実は，現在の DC 系の改善が L3 deferred commit ではなく，L1 prediction correction と L2 external memory によって生じている可能性が高いことを示す．
+したがって，現時点で「replay evidence に基づく model-state commit が改善の主因である」と主張するのは危険である．
+
+\section{論理的解釈}
+
+今回の結果から支持される仮説と，まだ支持されない仮説を分けると以下のようになる．
+
+\subsection{支持された仮説}
+
+第一に，prediction correction と external memory には精度向上のシグナルがある．
+Plan C では DC 系が最大 +1.23pp を達成し，Plan B でも最大 +0.49pp を達成した．
+これは，model state を直接動かさなくても，target session の過去情報を使った出力補正が分類精度を改善し得ることを示している．
+
+第二に，Replay-SafeCommit は現時点の安全な基準点として有効である．
+Plan C では \hsc=0/9 を保ちながら +0.69pp を達成し，Plan B では \hsc \(\leq 1\) の条件で最良であった．
+特に seed 安定性評価において，DC 系は平均精度を少し伸ばす一方で HSC を増やすため，安全性込みの主結果としては \replay の方が堅い．
+
+\subsection{まだ支持されない仮説}
+
+第一に，L3 replay-gated model-state commit が改善の主因であるという仮説は支持されない．
+model commit が 0 回の variant が最高精度を出しているため，少なくとも現在の実装と閾値では，L3 commit の必要性を示せていない．
+
+第二に，DC-Replay が安全性込みで Replay-SafeCommit を超えるという仮説もまだ支持されない．
+Plan C の best DC は \replay より高精度だが \hsc=1/9 であり，Plan B では \hsc=4/12 となる．
+研究としては面白いが，このまま主結果にするには安全性が足りない．
+
+第三に，強い correction を入れればよいという単純な仮説も支持されない．
+correction strength を上げると S2/S7 では改善が出る一方で，S4/S6 では悪化する．
+したがって，補正器の強さだけでなく，どの入力を memory に入れるか，どの subject 状態で補正を強めるかを制御する必要がある．
+
+\section{新規性の整理}
+
+今回の結果を踏まえると，本研究の主張は次のように修正するのが妥当である．
+
+\begin{quote}
+EEG-MI OTTA では，各 trial で即座に model-state commit を検討するよりも，まず非破壊な prediction correction と external memory によって target session の情報を利用し，model-state commit は例外的に扱う方が，平均精度と subject-level harm 抑制の両立に有利である．
+\end{quote}
+
+この修正により，研究の中核は「候補を増やす」ことではなく，「状態の破壊リスクに応じて適応の責務を分ける」ことになる．
+特に，model state を変えない L1/L2 を第一選択とし，L3 は持続 drift が明確な場合のみ検討する，という方針が新規性の中心になる．
+
+ただし，L3 deferred commit は完全に捨てるべきではない．
+今回の結果は，現在の drift detector や replay gate が L3 の有効性を引き出せていないことを示しただけであり，持続的な prior drift や prototype drift が明確な条件では model-state commit が必要になる可能性は残っている．
+したがって，L3 は現時点では補助仮説として扱い，controlled drift 条件で再検証するのがよい．
+
+\section{今後の方針}
+
+今後は，以下の順序で進める．
+
+\begin{enumerate}
+  \item \textbf{主結果の固定}: 現時点の安全な主結果として Replay-SafeCommit を置く．
+  \item \textbf{L1/L2 の改善}: prediction correction と external memory admission を中心に改善する．
+  \item \textbf{memory reliability の導入}: pseudo-label stability，density support，prototype consistency，class entropy，raw-corrected disagreement を記録し，S4/S6 の悪化要因を特定する．
+  \item \textbf{correction strength の制御}: S2/S7 のように補正が効く subject と，S4/S6 のように過補正になりやすい subject を分ける状態量を探す．
+  \item \textbf{L3 の再設計}: prior drift と prototype drift に限定し，commit が本当に必要な条件だけで controlled ablation を行う．
+  \item \textbf{論文化の軸の明確化}: 「Replay-SafeCommit による安全な model-state update」と「Commitless Memory-Corrected OTTA による非破壊補正」を分け，どちらが主張の中核になるかを実験で決める．
+\end{enumerate}
+
+\section{結論}
+
+今回の 72h sweep は，単純な意味で「DC-Replay が成功した」結果ではない．
+平均精度だけを見れば DC 系は Plan C で \source から +1.23pp まで伸びたが，subject-level harm と seed 安定性を含めると，安全な主結果としては Replay-SafeCommit の方がまだ強い．
+一方で，この結果は研究として非常に重要である．
+なぜなら，model-state commit をしなくても，prediction correction と external memory によって精度改善が生じることが明確になったからである．
+
+したがって，今後の研究は，L3 commit を中核に据えるよりも，まず非破壊な memory-corrected prediction を強くし，その安全性を memory reliability によって制御する方向へ進めるべきである．
+Replay-SafeCommit は安全な基準点として残し，DC-Replay は「どこまで model-state commit を避けられるか」を示す拡張として再整理する．
+この修正により，本研究は，EEG-MI OTTA における平均精度向上と subject-level harm 抑制の両立という問題に対して，より論理的で実験可能な主張を持つことができる．
+
+\begin{thebibliography}{9}
+\bibitem{altaheri2025}
+H. Altaheri, F. Karray, and A.-H. Karimi,
+``Temporal convolutional transformer for EEG based motor imagery decoding,''
+Scientific Reports, 2025.
+
+\bibitem{luo2026}
+H. Luo, N. Lu, X. Wang, and X. Niu,
+``Bayesian Test-Time Adaptation via Dirichlet Feature Projection and GMM-Driven Inference for Motor Imagery EEG Decoding,''
+ICLR 2026.
+
+\bibitem{progress260511}
+生川聖也,
+``EEG-MI cross-session OTTA における Replay-SafeCommit の検討,''
+第二回班ゼミ資料, 2026年5月11日.
+\end{thebibliography}
+
+\end{document}
