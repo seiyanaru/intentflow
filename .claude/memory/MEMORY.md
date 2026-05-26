@@ -9,7 +9,8 @@
 
 ## 実験知見・研究方向（2605）
 - `dc-replay-empirical-ceilings.md`: TCFormer凍結+予測補正型OTTAの精度天井（L1 ≲ +3.4pp、3データセット）と L3 model-state commit の no-op。
-- `research-direction-2605.md`: commitless 主手法は筋が悪い。safety・理解主導へ方向転換。外部競合 BFT 2026 要精読。
+- `research-direction-2605.md`: 精度主軸へ確定。alignment-first selective minimal feature adaptation が本命(EA + Base凍結)。
+- `tcformer-hybrid-failure.md`: triggered feature adaptation は repo で失敗済み(Hybrid HGD -13.66)。差分は EA + Base凍結。
 
 ## メモリに入れるもの
 - 安定した研究方針
