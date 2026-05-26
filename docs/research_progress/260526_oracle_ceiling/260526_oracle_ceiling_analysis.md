@@ -1,87 +1,100 @@
-# 260526 Oracle天井分析: 「特徴を変えない補正」の理論限界(2a/2b/HGD)
+# 260526 精度向上の実現可能性分析(2a中心): 特徴を変えない補正は全滅、EA/特徴適応が唯一の道
+
+> 位置づけ: 研究を「精度を大きく上げる」主軸に転換するにあたり、**TCFormer凍結+予測補正の枠で精度がどこまで上がるか**を、source-only logitsの3分析(oracle天井 → top2の中身 → calibration)で確定。結論は一貫: **特徴を変えない補正では上がらない。EA(特徴整列)/特徴適応が唯一の道。**
+
+---
 
 ## 結論(3行)
 
-- **L1(prior/logit-bias補正)の後知恵天井は、3データセット全部で +1.7〜3.4pp しかない。** 天井が低いのは2a特有ではなく汎用的。
-- **「特徴を変えない補正」の絶対上限(top2 oracle)は source 精度に強く依存**: 2a +11.84pp、HGD +5.00pp、2b は2クラスで自明。source が強いほど余地が縮む。
-- **→ commitless posterior/prior correction で「+5ppを汎用的に」上げるのは物理的に不可能。** 「大きく上げる」には特徴適応が必須(=安全性トレードオフ・競合多)。
+- **特徴を変えない補正(static prior / per-class bias / 温度 / confidence re-ranking)は精度をほぼ上げられない。** prior天井 +3.36pp(後知恵)、near-tie 18.6%のみ、温度補正はacc不変。
+- 誤分類の **68.5% は「正解が2位」**(特徴固定でも理論上届く)だが、その大半は **確信を持った誤り**(margin中央0.334、ECE 5.6%・T*≈0.89で**未calibration由来ではない**)。
+- **→ 精度を上げる道は EA / 特徴適応のみ。** 混同は系統的(feet↔tongue, left↔right hand)で、特徴整列に望みがある。
 
-これは実測の補強知見と整合する: 実測 best DC variant は 2a single-seed で **+1.23pp**([key_result_table.csv](../regular_seminar_2605/tables/key_result_table.csv))= L1天井(+3.36)の37%、top2天井(+11.84)の10%。L3 model-state commit は精度に **no-op**([l3_diagnostics.csv](../regular_seminar_2605/tables/l3_diagnostics.csv))。
-
----
-
-## 問いと位置づけ
-
-DC-Replay / CMC は「TCFormer本体を凍結したまま posterior / prior / memory で予測を補正する」OTTA。**この枠組みで原理的に何ppまで上げられるか**を、source-only logits + 真ラベルで上から押さえる。願望ではなくデータで天井を決めるのが目的。
-
-得られた天井は **すべて後知恵オラクル(hindsight upper bound)** であり、オンライン無教師の実運用では**必ずこれより小さい**。「ここまでしか伸びない」を示す上界として読む。
+実測の補強: best DC variant は 2a single-seed で +1.23pp([key_result_table.csv](../regular_seminar_2605/tables/key_result_table.csv))、L3 commit は no-op([l3_diagnostics.csv](../regular_seminar_2605/tables/l3_diagnostics.csv))。
 
 ---
 
-## 方法
+## 背景・問い
 
-- **入力**: 各被験者の source-only(適応なし)全クラス logits `.npy` と真ラベル(variant npz の `label` 列)。読み取りのみ、GPU不要、再ラン無し。
-- **検証**: 2a の source_acc 平均 = 82.72 が key_result_table の `source_only`(82.72)と完全一致 → logits とラベルの順序整合を確認済み。
-- **天井の定義**:
-  - `top2_oracle`: 真クラスが source top-2 に入る割合。**特徴を変えない任意の re-ranking の絶対上限**(2クラスでは常に100%=無意味)。
-  - `prior_shift_oracle`: クラス別定数バイアス b を後知恵で座標降下最適化した argmax 精度。**L1(prior/logit-bias補正)の上限**。
-  - `uniform_prior_acc`: 真のテスト事前分布で global prior 補正した精度。バランスドデータでの sanity。
-- スクリプト: [oracle_ceiling.py](../../../intentflow/offline/scripts/analysis/oracle_ceiling.py) / 数値: [oracle_ceiling_all.csv](oracle_ceiling_all.csv)
+DC-Replay / CMC(TCFormer凍結 + posterior/prior/memory補正)で精度がどこまで上がるかを、願望でなくデータで上から押さえる。すべて **source-only logits の read-only 分析**(GPU不要)。oracle系は **後知恵オラクル=上界**で、オンライン無教師では必ずこれより小さい。
 
 ---
 
-## 結果
+## 分析1: Oracle天井 — どこまで届くか
 
-### クロスデータセット(平均 Δ vs source)
+スクリプト [oracle_ceiling.py](../../../intentflow/offline/scripts/analysis/oracle_ceiling.py) / [oracle_ceiling_all.csv](oracle_ceiling_all.csv)
 
-| dataset | クラス | 被験者 | source acc | Δ top2(特徴固定の絶対上限) | Δ prior_shift(L1上限) | Δ uniform |
-|---|---:|---:|---:|---:|---:|---:|
-| BCIC2a | 4 | 9 | 82.72 | **+11.84** | **+3.36** | +0.00 |
-| BCIC2b | 2 | 9 | 87.74 | 自明(100%) | **+1.73** | +0.00 |
-| HGD | 4 | 11 | 94.32 | **+5.00** | **+3.18** | +0.00 |
+| dataset | クラス | source acc | Δ top2(特徴固定の絶対上限) | Δ per-class bias(L1上限) | Δ static prior |
+|---|---:|---:|---:|---:|---:|
+| 2a | 4 | 82.72 | **+11.84** | +3.36 | +0.00 |
+| 2b | 2 | 87.74 | 自明(100%) | +1.73 | +0.00 |
+| HGD | 4 | 94.32 | +5.00 | +3.18 | +0.00 |
 
-### 被験者別の要点
+- 静的global prior補正は3データセットでΔ0(テストがクラスバランスのため無価値)。
+- per-class bias(L1の上限)は3データセットで +1.7〜3.4pp に留まる。**L1天井が低いのは2a特有でなく汎用的。**
+- top2(特徴固定の絶対上限)は source精度に逆相関(82.72→+11.84、94.32→+5.00)。
 
-- **2a**: S6(src 70.49)と S2(src 72.57)が難。特に S6 は top2余地 +18.40 と大きいのに prior_shift は +1.74 = 「正解は2位に入るが定数バイアスでは救えない」=**特徴が混線**。bias補正では届かない被験者。
-- **2b**: S4(98.12)/S5(97.81)は既に高精度で余地ほぼゼロ。S2(70.00)は top2 +30 だが prior_shift +1.79。
-- **HGD**: S4/S5/S9 は既に **100%**(適応余地ゼロ)。一方 S2/S7/S11 は prior_shift 余地が大(+6.88/+8.12/+6.88)。
+検証: 2a source_acc平均=82.72 が key_result_table の `source_only` と完全一致(順序整合OK)。
+
+## 分析2: top2の中身 — 「届く分」の正体
+
+スクリプト [top2_breakdown.py](../../../intentflow/offline/scripts/analysis/top2_breakdown.py) / [top2_breakdown_2a.csv](top2_breakdown_2a.csv)
+
+- 誤分類 448 / 2592。うち **正解が2位 = 307(誤分類の68.5%、全体の11.84pp)** が特徴固定で理論上届く。
+- margin = p(誤1位) − p(正解2位) の **中央値 0.334**。僅差(margin<0.1)は **18.6%のみ**、<0.2 でも 36.2%。
+- → **大半(63.8%)はモデルが確信を持って間違えている。** 僅差の取りこぼしではない。
+- 系統的混同ペア(救済可能trial、pred→true): tongue→feet(39)、right_hand→feet(36)、left_hand→tongue(33)、left_hand→right_hand(32)。ランダムでなく構造的。
+
+含意: 温度/confidence-basedの安直なre-rankingで取れるのは **≈ +2pp**(near-tie 18.6% × 11.84pp)止まり。
+
+## 分析3: calibration — 確信誤りは本物か
+
+スクリプト [calibration_analysis.py](../../../intentflow/offline/scripts/analysis/calibration_analysis.py) / [calibration_2a.csv](calibration_2a.csv)
+
+| 指標 | 平均 | 読み |
+|---|---:|---|
+| ECE | 0.056 | 中程度。過剰自信は深刻でない |
+| 最適温度 T* | 0.89 | **<1 = 過剰自信ではない**(むしろ自信不足気味。T*>1はS5/S6のみ) |
+| ECE@T* | 0.045 | 温度補正で直る分はわずか0.011 |
+| acc(温度補正後) | 全被験者 不変 | **温度はargmaxを変えない=精度に無力** |
+| 確信誤りtrialのconf | 0.623 | 62%の確信で誤る(chance 25%の2.5倍) |
+
+→ 「margin大=未calibration」仮説は棄却。**確信誤りは本物**。calibration/温度補正では精度は上がらない(acc不変、確定)。
 
 ---
 
-## 解釈(観測と解釈を分ける)
+## 統合解釈: 精度向上の経路マップ(2a)
 
-**観測(データが言っていること):**
-1. `uniform prior` は3データセットで Δ0.00。静的グローバルprior補正は無価値。
-2. `prior_shift` 天井は 3データセットで +1.7〜3.4pp に収まる。
-3. `top2` 天井は source 精度と逆相関(82.72→+11.84、94.32→+5.00)。
+| 精度向上の経路 | 2aでの天井/効果 | 判定 |
+|---|---|---|
+| 静的global prior補正 | Δ0.00 | **死亡** |
+| per-class bias (L1) | +3.36(後知恵上界) | 低すぎ |
+| 温度 / calibration補正 | acc不変(Δ0) | **無力** |
+| confidence-based re-ranking | ~+2pp(near-tieのみ) | 不足 |
+| 特徴固定の絶対上限(top2) | +11.84 | だが63.8%は確信誤りで特徴情報が必須 |
+| **EA(特徴整列)/ 特徴適応** | top2超えを狙える | **唯一の道** |
 
-**解釈(観測からの推論、確度中):**
-1. L1の `static_prior` モードは原理的に効かない。`memory_prior` でオンラインに偏らせても、argmax を動かす力は per-class bias 空間に射影されるので **+1.7〜3.4pp が上界**。
-2. 実測 +1.23pp は L1天井の範囲内 = **prototype補正を持ち出さずとも prior 補正だけで説明可能**。+1.23pp の「正体」は posterior の定数シフトで足りる。
-3. source が強い設定(HGD)では「特徴を変えない補正」自体の余地が乏しい。汎用性を謳うほど、commitless では伸びしろが消える。
+3分析が一点に収束: **特徴を変えない限り精度は実質上がらない。** 混同が系統的(クラス対)なので、EA で分布ずれを整えればこの確信誤りを減らせる可能性がある(cross-sessionでnaïve prototype=T3Aが悪化したのは整列前のため、という外部所見とも整合)。
 
 ---
 
 ## データ品質・限界
 
-- すべて **後知恵オラクル=上界**。実運用のオンライン無教師補正は必ずこれより小さい。
-- **2a** は最新の充実 sweep(`c_aug_true_9subj`)。**2b/HGD は single-seed firstpass** で粗い初期推定。HGD は14被験者中11のみ(3被験者は logits/label 欠損)。
-- 完全な汎用性検証には、2b/HGD のマルチシード source-only 評価、および OpenBMI/Lee2019 の追加ランが必要(現状データ無し)。
-
----
+- oracle/top2/calibration はすべて **後知恵=上界**。実運用はこれより小さい。
+- 2a は最新の充実sweep、2b/HGD は single-seed firstpass(HGDは14中11被験者)。
+- best_temp は test label で最適化した上界(過剰自信の判定には十分)。ECEは288 trial/被験者でbin推定にノイズ。
+- calibration は精度を上げないが、**制約側(abstain-safe / decision safety)の土台**としては使える(ECE 5.6%)。
 
 ## 研究方向への含意
 
-- **commitless correction(L1+L2)を「次の提案手法」として磨くのは、3データセットで天井が低いと確証された以上、筋が悪い。**
-- 「大きく上げる」を汎用的に取るなら **特徴適応(TTT/self-supervised/alignment)が必須**。ただし安全性トレードオフ・競合多(EEGでも先行多数)。
-- 逆に、**「特徴を変えない補正の天井はこれだけ低い」+「L3 commit は no-op」という negative result 群が、手持ちデータでそのまま主張になる**。新規性を手法ではなく「理解と評価」に置く方向と整合。
-
----
+- 精度主軸で進むなら、**次はEA(特徴整列)の実測が第一手**(現状リポジトリにEA未実装)。軽量制約にも最も合う。
+- 「特徴を変えない補正の天井 + 確信誤りの実証」自体が、commitless系を捨てる強い根拠であり、先行検証として論文の付録になりうる。
 
 ## 再現方法
 
 ```bash
 conda activate intentflow
-python intentflow/offline/scripts/analysis/oracle_ceiling.py
+python intentflow/offline/scripts/analysis/oracle_ceiling.py       # 天井
+python intentflow/offline/scripts/analysis/top2_breakdown.py       # top2の中身
+python intentflow/offline/scripts/analysis/calibration_analysis.py # calibration
 ```
-パスは [oracle_ceiling.py](../../../intentflow/offline/scripts/analysis/oracle_ceiling.py) 冒頭の `R_2A / R_2B / R_HGD` で指定。
