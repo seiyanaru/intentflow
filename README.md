@@ -113,6 +113,32 @@ intentflow/
     └─ ADR/
 ```
 
+### 2.1 研究運用レイアウト（オフライン実験・解析・記録, 2026-06 整理）
+オフライン MI 研究は以下の規約で運用する。
+
+| パス | 役割 |
+|---|---|
+| `intentflow/offline/train_pipeline.py` | オフライン学習・評価の入口 |
+| `intentflow/offline/datamodules/` | データセット (bcic4_2a / 2b / hgd 等) |
+| `intentflow/offline/configs/` | 実験設定・アブレーション派生 |
+| `intentflow/offline/scripts/analysis/` | 解析・診断スクリプト |
+| `intentflow/offline/scripts/viz/topomap.py` | トポマップ生成器（再利用可・JPEG） |
+| `intentflow/offline/results/` | 実験出力。**`.gitignore` 対象（大容量のため非追跡・ローカル保持）** |
+| `intentflow/offline/results/research_outputs/` | 解析データ出力 (npz/json/csv・run 出力)。解析スクリプトはここを参照 |
+| `docs/research_progress/` | 日付付き進捗ノート (.md)・図 (`figures/`)・ゼミ資料 |
+| `.claude/memory/` | セッション横断の永続メモリ（研究方針・ベースライン前提・落とし穴） |
+
+- **データ出力は git 追跡しない**（`results/` を `.gitignore`）。再現はコード（tracked）から各スクリプトを再実行して生成する。
+- 進捗ノート・図・スライドは `docs/research_progress/` に集約し、記録として追跡する。
+
+トポマップ生成例:
+```bash
+# 判別度（どの電極にクラス信号があるか）
+python intentflow/offline/scripts/viz/topomap.py --dataset bcic2a --mode discriminative
+# 判別度 + 信号の強さ を2枚（quality≠worthiness の対比）
+python intentflow/offline/scripts/viz/topomap.py --dataset bcic2a --mode both
+```
+
 ## 3. クイックスタート
 1. Conda 環境構築:
    ```bash
@@ -304,24 +330,26 @@ Acquisition → Preprocess → Inference → Stabilizer → Adapt → WS Broadca
 - GitHub Actions (`deployment/ci/github-actions.yml`): lint → type check → pytest の最小ワークフローを提供。
 - Dockerfile を用いて offline/online ワークロードそれぞれを再現可能にする。
 
-## 13. 今後の課題と研究方向
+## 13. 研究の現状と方向（2026-06）
 
-### Hybridモデルの改善
-現在のHybridモデルには以下の課題があり、改善を進めています：
+オフライン MI（cross-session drift）の研究は、当初の「精度を上げる新規 OTTA 手法」探索から、
+**情報的限界の特徴づけ ＋ 実用的な安全機構** へ再構成した。
 
-1. **訓練/テスト挙動の統一**
-   - `entropy_gating_in_train: True` で訓練時もEntropy Gatingを有効化
-   
-2. **パラメータチューニング**
-   - エントロピー閾値の最適化（現在: 0.95 → 提案: 0.7）
-   - TTT学習率の低減（0.01 → 0.001）
+- **背景**: cross-session drift に label-free で適応する OTTA を探索（DC-Replay 等）。
+- **発見**: ラベルなしで、強い適応器（**DA-DC**: 凍結深層 TCFormer ＋ EA-Riemann 接空間 ＋ 古典 LDA の融合, source 比 +5pp）を
+  さらに超えて精度を上げるのは情報的に困難（**識別不能性の壁**）。EA 等の入力整列は低 channel（2b/3ch）で脆い。
+- **現在の提案（2段構えの安全モデル）**:
+  1. **軽量な信頼度フィルタ**（未ラベル特徴の clusterability）で、「適応で直せる drift か／そもそも弱い信号か」を
+     セッション単位で判定し、弱いものは弾く（abstain / fail-closed）。
+  2. 通過したセッションのみ強い適応器（DA-DC）で適応。
+  → **軽量・誤作動回避・実効精度向上** を同時に狙う。
+- **新規性の核と検証課題（E4）**: clusterability ゲートが既存の label-free 信頼度指標
+  （confidence / entropy / Mahalanobis / ATC / dispersity / Riemannian Potato 等）を
+  **AURC・risk-coverage で上回る**ことの実証。
 
-3. **データセット適応的なゲーティング**
-   - データセット特性に応じた動的な適応強度制御
+進捗・文献・実験計画の詳細は `docs/research_progress/` および `.claude/memory/thesis-plan-260606.md` を参照。
 
-### 研究目標
-- 精度維持（±1%以内）+ 訓練時間3-10倍短縮
-- 国際学会投稿レベルの新規性確保
+> 注: §4 / §13 旧版の TCFormer Hybrid (TTT) 比較は、上記に至る初期フェーズの記録。
 
 ## 14. ライセンス/貢献/謝辞
 - ライセンスは後日決定（暫定的に "All Rights Reserved"）。OSS 化時は Apache-2.0 を想定。
