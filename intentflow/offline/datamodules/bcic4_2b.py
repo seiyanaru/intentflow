@@ -76,6 +76,10 @@ class BCICIV2b(BaseDataModule):
         if self.preprocessing_dict["z_scale"]:
             X, X_val, X_test = BaseDataModule._z_scale_tvt(X, X_val, X_test)
 
+        X, X_val, X_test = BaseDataModule._ea_align_tvt(
+            X, X_val, X_test, self.preprocessing_dict
+        )
+
         self.train_dataset = BaseDataModule._make_tensor_dataset(X, y)
         self.val_dataset = BaseDataModule._make_tensor_dataset(X_val, y_val)
         self.test_dataset = BaseDataModule._make_tensor_dataset(X_test, y_test)
@@ -127,6 +131,10 @@ class BCICIV2bLOSO(BCICIV2b):
         # scale data
         if self.preprocessing_dict["z_scale"]:
             X, X_val, X_test = BaseDataModule._z_scale_tvt(X, X_val, X_test)
+
+        X, X_val, X_test = BaseDataModule._ea_align_tvt(
+            X, X_val, X_test, self.preprocessing_dict
+        )
 
         self.train_dataset = BaseDataModule._make_tensor_dataset(X, y)
         self.val_dataset = BaseDataModule._make_tensor_dataset(X_val, y_val)

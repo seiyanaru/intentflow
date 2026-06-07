@@ -52,8 +52,13 @@ def train_and_test(config):
     dataset_name = config["dataset_name"]
     use_cpu = config.get("gpu_id", 0) == -1
 
-    if use_cpu and dataset_name in config["preprocessing"]:
-        config["preprocessing"][dataset_name]["num_workers"] = 0
+    if use_cpu:
+        # CPU test-only runs can hang or crawl with many persistent workers in
+        # the sandbox. Keep CPU evaluation single-process and deterministic.
+        if dataset_name in config.get("preprocessing", {}):
+            config["preprocessing"][dataset_name]["num_workers"] = 0
+        elif isinstance(config.get("preprocessing"), dict):
+            config["preprocessing"]["num_workers"] = 0
     
     if "results_dir" in config and config["results_dir"]:
         result_dir = Path(config["results_dir"])
@@ -83,7 +88,7 @@ def train_and_test(config):
     config["model_kwargs"]["n_classes"] = datamodule_cls.classes
     
     # Update data_path to absolute path if not set (fallback)
-    if config["preprocessing"].get("data_path") is None:
+    if config["preprocessing"].get("data_path") is None and dataset_name != "bcic2b":
         config["preprocessing"]["data_path"] = "/workspace-cloud/seiya.narukawa/intentflow/data/raw/BCICIV_2a_gdf/"
 
     # Parse subject IDs from config
@@ -252,6 +257,8 @@ def parse_arguments():
     
     parser.add_argument("--seed", type=int, default=None, 
                         help="Random seed value (overrides config if specified)")
+    parser.add_argument("--max_epochs", type=int, default=None,
+                        help="Override max_epochs from config, useful for smoke runs.")
     parser.add_argument("--interaug", action="store_true", 
                         help="Enable inter-trial augmentation (overrides config if specified)")
     parser.add_argument("--no_interaug", action="store_true", 
@@ -268,6 +275,48 @@ def parse_arguments():
                         help="Path to pre-trained checkpoints dir. Skips training, loads checkpoints for test-only.")
     parser.add_argument("--subject_ids", type=str, default=None,
                         help="Comma-separated subject IDs to override config (e.g. '2' or '2,7').")
+    parser.add_argument("--ea", action="store_true",
+                        help="Enable train/test-consistent session-wise Euclidean Alignment preprocessing.")
+    parser.add_argument("--ea_eps", type=float, default=None,
+                        help="Eigenvalue floor for Euclidean Alignment covariance whitening.")
+    parser.add_argument("--ea_shrinkage", type=float, default=None,
+                        help="Shrink EA covariance toward scaled identity before whitening.")
+    parser.add_argument("--ea_power", type=float, default=None,
+                        help="Partial EA whitening strength: 1.0=standard EA, 0.0=no whitening.")
+    parser.add_argument("--ea_weight_mode", type=str, default=None,
+                        choices=["none", "var", "artifact", "full"],
+                        help="Reliability-aware channel weighting for EA covariance.")
+    parser.add_argument("--ea_weight_min", type=float, default=None,
+                        help="Minimum channel reliability weight for weighted EA.")
+    parser.add_argument("--ea_weight_tau", type=float, default=None,
+                        help="Temperature for converting channel badness to reliability weights.")
+    parser.add_argument("--ea_weight_margin", type=float, default=None,
+                        help="Channel-relative margin before reliability penalties activate.")
+    parser.add_argument("--ea_weight_strength", type=float, default=None,
+                        help="Blend strength for weighted EA covariance: 0=standard EA, 1=fully weighted.")
+    parser.add_argument("--ea_weight_post_power", type=float, default=None,
+                        help="Optionally gate aligned channels by reliability**power after EA.")
+    parser.add_argument("--ea_weight_repair_strength", type=float, default=None,
+                        help="Replace low-reliability channels before EA using train-channel correlation.")
+    parser.add_argument("--ea_weight_repair_threshold", type=float, default=None,
+                        help="Reliability threshold for pre-EA channel repair.")
+    parser.add_argument("--ea_weight_repair_topk", type=int, default=None,
+                        help="Number of correlated channels used for pre-EA channel repair.")
+    parser.add_argument("--stress_mode", type=str, default=None,
+                        choices=["none", "gaussian", "highvar", "flatline", "dropout", "line", "burst", "scale", "mixed"],
+                        help="Inject reproducible test-only channel corruption after z-scaling and before EA.")
+    parser.add_argument("--stress_channels", type=str, default=None,
+                        help="Comma-separated 0-based channel indices to corrupt. If omitted, channels are sampled.")
+    parser.add_argument("--stress_n_channels", type=int, default=None,
+                        help="Number of random channels to corrupt when --stress_channels is omitted.")
+    parser.add_argument("--stress_level", type=float, default=None,
+                        help="Artifact strength. Interpreted as z-scaled noise/sine amplitude or scale factor.")
+    parser.add_argument("--stress_seed", type=int, default=None,
+                        help="Seed for deterministic artifact channel/trial selection.")
+    parser.add_argument("--stress_p_trials", type=float, default=None,
+                        help="Fraction of test trials to corrupt.")
+    parser.add_argument("--stress_line_freq", type=float, default=None,
+                        help="Line-noise frequency for --stress_mode line or mixed.")
     return parser.parse_args()
 
 # ----------------------------------------------
@@ -325,7 +374,9 @@ def run():
     config["preprocessing"]["z_scale"] = config["z_scale"]
     # Select appropriate data path based on dataset
     if args.dataset == "bcic2b":
-        config["preprocessing"]["data_path"] = config.get("data_path_2b", config.get("data_path", None))
+        # BCIC2b evaluation GDF files do not contain class markers in the local
+        # raw path. Use MOABB/BNCI2014004 so sessions 3-4 get true labels.
+        config["preprocessing"]["data_path"] = None
     else:
         config["preprocessing"]["data_path"] = config.get("data_path", None)
     if args.dataset == "bcic2a":
@@ -334,6 +385,89 @@ def run():
             if args.bcic2a_eval_label_path is not None
             else config.get("data_path_2a_eval_labels", None)
         )
+    if (
+        args.ea
+        or args.ea_eps is not None
+        or args.ea_shrinkage is not None
+        or args.ea_power is not None
+        or args.ea_weight_mode is not None
+        or args.ea_weight_min is not None
+        or args.ea_weight_tau is not None
+        or args.ea_weight_margin is not None
+        or args.ea_weight_strength is not None
+        or args.ea_weight_post_power is not None
+        or args.ea_weight_repair_strength is not None
+        or args.ea_weight_repair_threshold is not None
+        or args.ea_weight_repair_topk is not None
+    ):
+        ea_cfg = dict(config["preprocessing"].get("ea", {}))
+        if args.ea:
+            ea_cfg["enabled"] = True
+        if args.ea_eps is not None:
+            ea_cfg["eps"] = args.ea_eps
+        if args.ea_shrinkage is not None:
+            ea_cfg["shrinkage"] = args.ea_shrinkage
+        if args.ea_power is not None:
+            ea_cfg["power"] = args.ea_power
+        if (
+            args.ea_weight_mode is not None
+            or args.ea_weight_min is not None
+            or args.ea_weight_tau is not None
+            or args.ea_weight_margin is not None
+            or args.ea_weight_strength is not None
+            or args.ea_weight_post_power is not None
+            or args.ea_weight_repair_strength is not None
+            or args.ea_weight_repair_threshold is not None
+            or args.ea_weight_repair_topk is not None
+        ):
+            weight_cfg = dict(ea_cfg.get("channel_weighting", {}))
+            if args.ea_weight_mode is not None:
+                weight_cfg["mode"] = args.ea_weight_mode
+                weight_cfg["enabled"] = args.ea_weight_mode != "none"
+            if args.ea_weight_min is not None:
+                weight_cfg["w_min"] = args.ea_weight_min
+            if args.ea_weight_tau is not None:
+                weight_cfg["tau"] = args.ea_weight_tau
+            if args.ea_weight_margin is not None:
+                weight_cfg["relative_margin"] = args.ea_weight_margin
+            if args.ea_weight_strength is not None:
+                weight_cfg["strength"] = args.ea_weight_strength
+            if args.ea_weight_post_power is not None:
+                weight_cfg["post_weight_power"] = args.ea_weight_post_power
+            if args.ea_weight_repair_strength is not None:
+                weight_cfg["repair_strength"] = args.ea_weight_repair_strength
+            if args.ea_weight_repair_threshold is not None:
+                weight_cfg["repair_threshold"] = args.ea_weight_repair_threshold
+            if args.ea_weight_repair_topk is not None:
+                weight_cfg["repair_topk"] = args.ea_weight_repair_topk
+            ea_cfg["channel_weighting"] = weight_cfg
+        config["preprocessing"]["ea"] = ea_cfg
+    if (
+        args.stress_mode is not None
+        or args.stress_channels is not None
+        or args.stress_n_channels is not None
+        or args.stress_level is not None
+        or args.stress_seed is not None
+        or args.stress_p_trials is not None
+        or args.stress_line_freq is not None
+    ):
+        stress_cfg = dict(config["preprocessing"].get("artifact_stress", {}))
+        if args.stress_mode is not None:
+            stress_cfg["mode"] = args.stress_mode
+            stress_cfg["enabled"] = args.stress_mode != "none"
+        if args.stress_channels is not None:
+            stress_cfg["channels"] = args.stress_channels
+        if args.stress_n_channels is not None:
+            stress_cfg["n_channels"] = args.stress_n_channels
+        if args.stress_level is not None:
+            stress_cfg["level"] = args.stress_level
+        if args.stress_seed is not None:
+            stress_cfg["seed"] = args.stress_seed
+        if args.stress_p_trials is not None:
+            stress_cfg["p_trials"] = args.stress_p_trials
+        if args.stress_line_freq is not None:
+            stress_cfg["line_freq"] = args.stress_line_freq
+        config["preprocessing"]["artifact_stress"] = stress_cfg
     # Override interaug if specified
     if args.interaug:
         config["preprocessing"]["interaug"] = True
@@ -347,6 +481,8 @@ def run():
     # Override seed if specified
     if args.seed is not None:
         config["seed"] = args.seed
+    if args.max_epochs is not None:
+        config["max_epochs"] = args.max_epochs
 
     # set to True to plot confusion matrices
     config["plot_cm_per_subject"] = True # set to True to plot per-subject confusion matrices

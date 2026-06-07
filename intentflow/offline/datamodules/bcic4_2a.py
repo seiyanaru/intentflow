@@ -130,6 +130,13 @@ class BCICIV2a(BaseDataModule):
             # Now we have train/val/test, use 3-way scaling
             X, X_val, X_test = BaseDataModule._z_scale_tvt(X, X_val, X_test)
 
+        X_test = BaseDataModule._apply_artifact_stress(
+            X_test, self.preprocessing_dict, subject_id=self.subject_id
+        )
+        X, X_val, X_test = BaseDataModule._ea_align_tvt(
+            X, X_val, X_test, self.preprocessing_dict
+        )
+
         # make datasets
         self.train_dataset = BaseDataModule._make_tensor_dataset(X, y)
         self.val_dataset = BaseDataModule._make_tensor_dataset(X_val, y_val)
@@ -179,6 +186,13 @@ class BCICIV2aTVT(BaseDataModule):
         # scale data
         if self.preprocessing_dict["z_scale"]:
             X_train, X_val, X_test = BaseDataModule._z_scale_tvt(X_train, X_val, X_test)
+
+        X_test = BaseDataModule._apply_artifact_stress(
+            X_test, self.preprocessing_dict, subject_id=self.subject_id
+        )
+        X_train, X_val, X_test = BaseDataModule._ea_align_tvt(
+            X_train, X_val, X_test, self.preprocessing_dict
+        )
 
         # Create datasets
         self.train_dataset = BaseDataModule._make_tensor_dataset(X_train, y_train)
@@ -241,6 +255,13 @@ class BCICIV2aLOSO(BCICIV2a):
         # scale data
         if self.preprocessing_dict["z_scale"]:
             X, X_val, X_test = BaseDataModule._z_scale_tvt(X, X_val, X_test)
+
+        X_test = BaseDataModule._apply_artifact_stress(
+            X_test, self.preprocessing_dict, subject_id=self.subject_id
+        )
+        X, X_val, X_test = BaseDataModule._ea_align_tvt(
+            X, X_val, X_test, self.preprocessing_dict
+        )
 
         self.train_dataset = BaseDataModule._make_tensor_dataset(X, y)
         self.val_dataset = BaseDataModule._make_tensor_dataset(X_val, y_val)

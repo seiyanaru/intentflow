@@ -48,7 +48,7 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[4]  # /mnt/data/seiya.narukawa/intentflow
 RESULTS = REPO / "intentflow/offline/results"
 OUT_FIG = REPO / "docs/research_progress/figures/260511_presentation_v2"
-OUT_TBL = REPO / "docs/research_progress/tables/260511_presentation_v2"
+OUT_TBL = REPO / "intentflow/offline/results/research_outputs/tables/260511_presentation_v2"
 OUT_FIG.mkdir(parents=True, exist_ok=True)
 OUT_TBL.mkdir(parents=True, exist_ok=True)
 

@@ -24,7 +24,7 @@ from pathlib import Path
 import numpy as np
 
 R_2A = "intentflow/offline/results/c_aug_true_9subj_20260506_004923"
-OUT = Path("docs/research_progress/260526_oracle_ceiling/top2_breakdown_2a.csv")
+OUT = Path("intentflow/offline/results/research_outputs/260526_oracle_ceiling/top2_breakdown_2a.csv")
 CLASSES = ["left_hand", "right_hand", "feet", "tongue"]
 
 

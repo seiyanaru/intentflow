@@ -7,10 +7,10 @@ Inputs (must exist):
   - intentflow/offline/results/_smoke_replay_v3_s2_*/replay_safe_otta_stats_s2_*.npz (for trace)
 
 Outputs:
-  docs/research_progress/tables/260511_presentation/main_result_table.csv
-  docs/research_progress/tables/260511_presentation/per_subject_delta.csv
-  docs/research_progress/tables/260511_presentation/s7_seed_table.csv
-  docs/research_progress/tables/260511_presentation/replay_candidate_trace.csv
+  intentflow/offline/results/research_outputs/tables/260511_presentation/main_result_table.csv
+  intentflow/offline/results/research_outputs/tables/260511_presentation/per_subject_delta.csv
+  intentflow/offline/results/research_outputs/tables/260511_presentation/s7_seed_table.csv
+  intentflow/offline/results/research_outputs/tables/260511_presentation/replay_candidate_trace.csv
   docs/research_progress/figures/260511_presentation/
       fig_main_source_vs_replay.png
       fig_per_subject_delta.png
@@ -39,7 +39,7 @@ import numpy as np
 REPO = Path("/mnt/data/seiya.narukawa/intentflow")
 RESULTS = REPO / "intentflow/offline/results"
 OUT_FIG = REPO / "docs/research_progress/figures/260511_presentation"
-OUT_TBL = REPO / "docs/research_progress/tables/260511_presentation"
+OUT_TBL = REPO / "intentflow/offline/results/research_outputs/tables/260511_presentation"
 OUT_FIG.mkdir(parents=True, exist_ok=True)
 OUT_TBL.mkdir(parents=True, exist_ok=True)
 

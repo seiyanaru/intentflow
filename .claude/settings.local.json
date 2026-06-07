@@ -8,7 +8,10 @@
       "Bash(sleep 5 && tail -40 /tmp/proto_vs_policy_run.log 2>/dev/null; echo \"---bg id state---\")",
       "mcp__claude_ai_Notion__notion-search",
       "mcp__claude_ai_Notion__notion-create-pages",
-      "mcp__claude_ai_Notion__notion-update-page"
+      "mcp__claude_ai_Notion__notion-update-page",
+      "Bash(python3 -c ' *)",
+      "Bash(conda run -n intentflow python -c ' *)",
+      "Bash(python3 -m json.tool)"
     ],
     "deny": [],
     "ask": []

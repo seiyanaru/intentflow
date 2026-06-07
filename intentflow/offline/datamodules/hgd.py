@@ -56,6 +56,8 @@ class HighGamma(BaseDataModule):
         if self.preprocessing_dict["z_scale"]:
             X, X_test = BaseDataModule._z_scale(X, X_test)
 
+        X, X_test = BaseDataModule._ea_align_tt(X, X_test, self.preprocessing_dict)
+
         # make datasets
         self.train_dataset = BaseDataModule._make_tensor_dataset(X, y)
         self.test_dataset = BaseDataModule._make_tensor_dataset(X_test, y_test)

@@ -1,5 +1,22 @@
 {
   "permissions": {
+    "allow": [
+      "Bash(python -)",
+      "Bash(python3 -)",
+      "WebSearch",
+      "Bash(python3 -c ' *)",
+      "Bash(ls intentflow/offline/datamodules/ 2>/dev/null; echo \"===datasets on disk===\"; find / -maxdepth 6 -iname \"*errp*\" 2>/dev/null | head; echo \"---\"; find ~/ /mnt -maxdepth 5 -type d \\\\\\( -iname \"*bcic*\" -o -iname \"*hgd*\" -o -iname \"*2a*\" -o -iname \"*openbmi*\" -o -iname \"*lee2019*\" \\\\\\) 2>/dev/null | head -20)",
+      "Read(//home/islabshi/**)",
+      "Bash(python3 intentflow/offline/scripts/analysis/eval_active_query_criteria.py)",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:pmc.ncbi.nlm.nih.gov)",
+      "WebFetch(domain:research.buaa.edu.cn)",
+      "WebFetch(domain:www.ncbi.nlm.nih.gov)",
+      "WebFetch(domain:github.com)",
+      "Bash(grep -i -n -E \"2a|accuracy|cross-subject|EEGNet|LaBraM|EEGPT|CBraMod|shot|calibrat|fine-tun|baseline|%|MIRep\" /tmp/mirepnet.txt | head -100)",
+      "Read(//tmp/**)",
+      "Bash(conda run -n intentflow python -c ' *)"
+    ],
     "deny": [
       "Read(./.env)",
       "Read(./.env.*)",

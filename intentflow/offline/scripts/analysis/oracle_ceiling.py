@@ -25,7 +25,7 @@ from pathlib import Path
 
 import numpy as np
 
-OUT_DIR = Path("docs/research_progress/260526_oracle_ceiling")
+OUT_DIR = Path("intentflow/offline/results/research_outputs/260526_oracle_ceiling")
 
 R_2A = "intentflow/offline/results/c_aug_true_9subj_20260506_004923"
 R_2B = "intentflow/offline/results/phaseC_2b_firstpass_20260422_164615_seed0"

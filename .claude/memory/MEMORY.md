@@ -11,6 +11,8 @@
 - `dc-replay-empirical-ceilings.md`: TCFormer凍結+予測補正型OTTAの精度天井（L1 ≲ +3.4pp、3データセット）と L3 model-state commit の no-op。
 - `research-direction-2605.md`: 精度主軸へ確定。alignment-first selective minimal feature adaptation が本命(EA + Base凍結)。
 - `tcformer-hybrid-failure.md`: triggered feature adaptation は repo で失敗済み(Hybrid HGD -13.66)。差分は EA + Base凍結。
+- `prior-art-novelty-bounds.md`: DA-DC/family-lawを先取りする先行研究(Hidden Clones/Gorbett&Jana/T-TIME等)とP2オンラインno-op。防衛可能な交差点と3戦略(A局所化/B選択ラベル/C検出専用)。label-free精度の全方向閉鎖・symmetry/S1/S5棄却・Law-2 CV検証も追記。
+- `thesis-plan-260606.md`: M2修論の確定方向（オフライン特徴づけ：壁CLAIM1＋機構CLAIM2＋monitor CLAIM3）と半年実行プログラム（E1=Lee2019 monitor汎用性がgo/no-go）。
 
 ## メモリに入れるもの
 - 安定した研究方針
