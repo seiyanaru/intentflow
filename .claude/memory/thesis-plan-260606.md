@@ -56,5 +56,30 @@ metadata:
 - **FB4救済(worthiness≠accuracy)は弱い**: 2a DA-DC gain(mean+4.44 std2.74 harmed0/9)に対し Spearman(clusterability,gain)=**−0.667**＝**精度の裏返し**(高clus=高精度=伸びしろ小)で独立なworthiness信号ではない。適応利得の予測子は**drift +0.60**(既存の2軸=clusterability:reliability/drift:benefit, test_drift_vs_junk通り)。新規の救済軸にならず。
 - **確定移行**: CLAIM3を"clusterabilityが既存指標に優越"とは主張しない。**FB1=cross-session MI 適応ワーシネス・ゲート ベンチマーク**(統一プロトコル＋「強デコーダでは出力空間dispersityが特徴空間clusterabilityを上回る・差は小・dataset依存」という特徴づけ＋2軸reliability/benefit)＋**FB2=CLAIM2機構(driftはheadに局在/identifiable-yet-uncorrectable, CV検証済・先行なし)** の二本柱。CLAIM3はcorrelation(monitor)としては残る(2a/2b/Lee2019で+0.6〜0.8)が優越主張はしない。CLAIM1/2は独立で健在＝修論は立つ。
 - **無人パイプライン完走(`run_e4_badbranch_pipeline.sh`→`260608_e4_pipeline.log`, 失敗0)**。**3データセット横断E4(lda mode, paired bootstrap)確定**: Lee2019(n=54)**BAD**(cl rank8-9, nuc_dispersityに有意負け) / 2a(n=9)MARGINAL(cl rank1だがΔ=+0.008 p=0.212＝検定力無) / 2b(n=9)MARGINAL(cl rank2, vs nuc_dispersity Δ=−0.002 p=0.688＝完全な引き分け, cl≈feat_db≈feat_ch≈nuc_dispersity全部 Spearman+0.82-0.87)。**結論: nuc_dispersity(Deng)が全3datasetでrank1/tied-rank1で一貫最良。clusterabilityは一度もnuc_dispersityに明確勝ちできず、well-poweredなLee2019では有意負け＝優越主張は完全に棄却**。**FB4救済も否定**: 2a cl-vs-gain −0.667(精度の裏返し)・2b cl-vs-EA-benefit −0.192(弱)、適応利得予測はdrift +0.60。**Stieger2021 DL完了**(62被験者, 戻ったとき用)。**Potatoは無人から除外**(戻ってから)。
-- **最終確定方向**: 修論は **FB1(ベンチマーク: 「強い校正済みcross-session MIデコーダでは出力空間dispersityが最良の適応ゲート, 特徴空間clusterabilityは小/低次元datasetで競合するが大規模で劣後・decoder/dataset依存」＋2軸reliability/benefit特徴づけ) ＋ FB2(CLAIM2機構: driftはheadに局在/identifiable-yet-uncorrectable, 先行なし・CV検証済)** の二本柱。CLAIM3はmonitor相関(+0.6-0.9)としてのみ残し優越は主張しない。CLAIM1(壁)/CLAIM2は独立健在＝修論は立つ。これがM2の最も正直で防衛可能な落とし所。
+**【2026-06-09続き：方向転換＝"安全な選択的適応"へ。GPT deep-researchと独立workflowが同設計に収束。EB-poolingで positive】** 進捗ノート: `docs/research_progress/260609_safe_selective_adaptation.md`、図 `ゼミ資料/260609_safegate_{A..E}.png`、コード `lee2019_riemann_adapter_spread.py / lee2019_fair_gate_retest.py / atta_lcb_cross_adapter.py / pooled_gate.py / viz/viz_{safe_adapt_gate,pooled_gate}.py`。
+- **再定義**: ゲートの標的は精度でなく「**適応の害/利得（worthiness）**」。GPTと社内workflowが同一設計に収束＝「反事実overrule監査ゲート＋マージン保護head輸送＋少数ラベルprobe」。
+- **本物アダプタの害ばらつき(Lee2019 n=54)**: 別系統 Riemann-tangent-LDA は62chで**悪いアダプタ**＝meanΔ−11.2/43人害/worst−42（`lee2019_riemann_adapter_spread.py`）。2a DA-DCは良(+4.4/0害)、2b EAはS5катаstrophe。＝利得/害が巨大にばらつく＝ゲート対象は実在。
+- **リーク教訓（ユーザ指摘で発覚・[[feedback-dont-declare-dead]]系の重要校正）**: probe本を評価に混ぜると水増し。正＝**先頭k本probe／残りn−kで評価**。直すと per-session LCB/global は **0%（≈常に不適応）**＝最小ラベルでper-session判定は原理不能（+4.4pp確証に k≈120本）。
+- **【positive】EB-pooling（経験ベイズ縮約, `pooled_gate.py`）**: セッション間で借り強度。**2a DA-DC で oracle利得100%回収(+4.58)・害0**（per-session/globalは0%）、**Lee2019危険で害0維持**。globalに勝つ理由＝τ(セッション間一貫性)を使うから。**EB+H（label-free信号prior）は効かない（むしろ害増）→素のEBが最良**。
+- 留保: 2a n=9小、EB判定は実質コホート単位（per-session細選択は well-powered混在アダプタが要）、EBは古典＝新規性は「最小ラベル×プーリングがcross-session MI安全選択的適応を成立させる実証＋per-session最小ラベル不能の対比」に置く。
+- **次**: well-powered混在アダプタ(Stieger or 2a半合成害)でper-session選択性検証。
+
+**【2026-06-09 新規性・位置づけ judge（文献workflow wbz88ngcr）】** EB-pooled最小ラベル安全選択的適応の新規性＝**medium-low（手法は借り物・composition+domain貢献）**。
+- **先取りされた中核**: ①LCB>0でadopt＝**c-value(Trippe et al. JASA 2021/2102.09705)**＝階層ベイズ推定へのLCB判定まで既出。②never-below-source＝**Safe Policy Improvement(Laroche SPIBB ICML'19, Thomas2015, Petrik NeurIPS'16)**。③コホート縮約+go/no-go+逐次停止＝**ベイズ・バスケット試験(Chu&Yuan2018)＋EB/James-Stein**。
+- **直接競合（同Stieger2021）**: **Wimpff 2502.06828(2025)＝per-session fine-tuning(無条件・ゲート無・pool無・安全無)**＝我々のベースライン。EDAPT 2508.10474も縦断personalization。**head-to-head で「同精度で harmed減」を示すのが勝負**。
+- **残る本物の貢献**: (1)**検定力不足の診断**（per-session最小ラベルLCBは~120本必要→必ず常に不適応に退化、誰も述べてない＝最強）(2)EBプーリング処方で検定力回復 (3)縦断MI具体化＋負の特徴づけ。
+- **make-or-break＝Stiegerでper-session選択性**（現EBは2a全採用/Lee2019全棄却＝コホート単位。「ただ悪アダプタを全棄却」批判を覆すには混在で個別仕分けを示す必要）。
+- **修正必須**: ATTA引用は ICCV'21でなく**Gui/Li/Ji ICLR'24 (SimATTA)**。安全は**1−δ確率的**と明記(ハード床でない)。診断をリードに(安全契約は前面に出さない)。venue=TNSRE/JNE現実的・NeurIPS/ICLRはworkshop。
+- 関連: LTT/conformal(Angelopoulos), selective classification(Geifman&El-Yaniv NeurIPS17), safe-TTA risk monitoring(Schirmer 2507.08721, StableSleep, reset-on-consecutive-drop 2603.03796), HILTTA 2405.18911/CPATTA 2509.25692(few-label TTA), 縦断MI fine-tuning。
+
+**【2026-06-11 Stieger実証で方針が"縮約(α)中心"に収束】** 詳細は [[../docs/research_progress/260609_safe_selective_adaptation.md]] §9-13。Stieger2021 60被験者/524-536 subj-session・leak-free・get_data律速対策で `stieger_epochs_cache/` に前処理dump済。
+- **mirage確定**: 最小ラベル(k≤16)のEB-poolingは全採用に退化(harmed81/selectivity0)。真の選択性はk~64-96要、そこでpooling優位は小。＝**最小ラベル×poolingで安全な選択的適応は安全目標に対し幻想**。
+- **有害尾はラベルなしでは見分けられない（負だが決定的）**: 本命H(Lee2019 ρ=−0.72)は Stiegerで AUROC0.565・ρ+0.28（符号逆＝cross-dataset汎化失敗）。単体シグナル全滅(0.55-0.61)、6信号LOSO複合でも**0.661が天井**。covariate-drift(riemann 0.547)も出力空間も同様。
+- **有害は構造を持つ**: 時系列持続2.4倍・84%が33%被験者に集中。subjMean veto で +6.05pp/72%oracle/harmed81→34 を 1/4ラベルで（だが harmed数件の強安全には未達）。
+- **固定解除(unfreeze)は frozen+α縮約を上回らない**（route1実測: head-bias α=0.5でworst−10→−4・利得半減、ドリフトgateは尾を分離不能）。frozen契約は維持（軽量・汎用・abstain-safe）。
+- **確定方針＝source-anchored α縮約が安全の主役**: 「弾く(veto)」でなく **TS-gEA（EAをsource基準へ測地線縮約, α→0=harm下限を構造保証）** で worst-case を構造的に締め、弱い複合シグナル(0.66)＋subjMean(時系列)を**αを連続変調する弱い事前分布**に使う。新規性の核＝**harmed-count/worst-caseを主指標化＋αをlabel-free harmトラストに紐付け**（GOPSA/SPDIM/TTNは教師あり学習・harmed非報告）。
+- 直接競合 Wimpff 2502.06828（同Stieger・unconditional always-adapt・harmed分布未報告）に対し「同精度でharmed削減」がhead-to-head。
+- **次**: TS-gEA を全コホートで α∈{0,.25,.5,.75,1} 掃引（cachedから, get_data不要）→ harmed/worst/effΔ/labels を always・per-sess LCB・subjMean と比較。`stieger_dump_epochs.py`/`stieger_probs_dump.py`/`stieger_sequential_veto.py` が基盤。
+
+- **（旧）最終確定方向**: 修論は **FB1(ベンチマーク: 「強い校正済みcross-session MIデコーダでは出力空間dispersityが最良の適応ゲート, 特徴空間clusterabilityは小/低次元datasetで競合するが大規模で劣後・decoder/dataset依存」＋2軸reliability/benefit特徴づけ) ＋ FB2(CLAIM2機構: driftはheadに局在/identifiable-yet-uncorrectable, 先行なし・CV検証済)** の二本柱。CLAIM3はmonitor相関(+0.6-0.9)としてのみ残し優越は主張しない。CLAIM1(壁)/CLAIM2は独立健在＝修論は立つ。これがM2の最も正直で防衛可能な落とし所。
 - **戻ったらやること**: (1)`260608_e4_pipeline.log`で2b E4とfull FB4を確認(2bは難3ch低acc帯=clusterabilityが効く可能性が残る唯一の帯), (2)Potato dump(R2の品質≠worthiness), (3)Stieger E4+縦断monitor+セッション単位N連続policy, (4)ベンチマーク論文の枠組み執筆着手。

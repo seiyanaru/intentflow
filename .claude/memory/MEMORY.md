@@ -6,6 +6,7 @@
 - `project-overview.md`: リポジトリの目的、主要研究トラック、主な作業場所。
 - `working-conventions.md`: 命名、成果物の配置、報告期待値、実験衛生。
 - `active-questions.md`: 現在の研究課題、詰まりやすい論点、再訪すべき意思決定。
+- `feedback-dont-declare-dead.md`: 方向を早々に死に判定して撤退を勧めるな。否定は淡々と、次の一手で締める。
 
 ## 実験知見・研究方向（2605）
 - `dc-replay-empirical-ceilings.md`: TCFormer凍結+予測補正型OTTAの精度天井（L1 ≲ +3.4pp、3データセット）と L3 model-state commit の no-op。
@@ -13,6 +14,10 @@
 - `tcformer-hybrid-failure.md`: triggered feature adaptation は repo で失敗済み(Hybrid HGD -13.66)。差分は EA + Base凍結。
 - `prior-art-novelty-bounds.md`: DA-DC/family-lawを先取りする先行研究(Hidden Clones/Gorbett&Jana/T-TIME等)とP2オンラインno-op。防衛可能な交差点と3戦略(A局所化/B選択ラベル/C検出専用)。label-free精度の全方向閉鎖・symmetry/S1/S5棄却・Law-2 CV検証も追記。
 - `thesis-plan-260606.md`: M2修論の確定方向（オフライン特徴づけ：壁CLAIM1＋機構CLAIM2＋monitor CLAIM3）と半年実行プログラム（E1=Lee2019 monitor汎用性がgo/no-go）。
+
+## Stieger安全選択的適応（2606, 最新の本線）
+- `stieger-safe-adapt-state-260611.md`: **現状スナップショット・引き継ぎ**。確定値(EA+7.85/harmed16%/mirage/ICC0.468/E-A veto AUROC0.66弱/scalar-αトレードオフ)・epochキャッシュ場所・走行スクリプト・図・落とし穴・次の一手。**新チャットはまずこれを読む**。
+- `anisotropic-trust-shrinkage-idea.md`: **新規手法案=異方的trust縮約**（固有方向ごとラベルフリーtrustでEA縮約→利得保持と安全を両立、scalarトレードオフを破る狙い）。決定実験 stieger_anisotropic_align.py 書き上げ済・**未実行**。新チャットの第一手＝これの実行・解釈。
 
 ## メモリに入れるもの
 - 安定した研究方針
